@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analytics Gallery</title>
+  <style style="user-select:none;">
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 360px;
+      overflow: hidden;
+    }
+    main { 
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 15px;
+      padding: 10px;
+      width: 400px;
+      height: 360px;
+      box-sizing: border-box;
+      overflow: hidden;
+      justify-content: center;
+      align-items: center;
+    }
+    .card { 
+      flex: 0 0 300px;
+      position: relative; 
+      overflow: hidden; 
+      border-radius: 12px; 
+      background: #050505; 
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8); 
+      cursor: pointer; 
+      transition: transform 0.4s cubic-bezier(0.165, 0.84, 0.44, 1), box-shadow 0.4s ease; 
+    }
+    .card:hover { transform: scale(1.05); box-shadow: 0 16px 35px rgba(0,0,0,.7); }
+    .card img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+    .card::before { content: ''; display: block; padding-top: 56.25%; }
+    .label { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,.7); color: #fff; text-align: center; padding: 10px; font-size: 14px; opacity: 0; transition: opacity .3s; }
+    .card:hover .label { opacity: 1; }
+    #m { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.95); z-index: 100; align-items: center; justify-content: center; flex-direction: column; opacity: 0; transition: opacity .3s ease; }
+    #m:target { display: flex; opacity: 1; }
+    #m img { max-width: 95vw; max-height: 80vh; object-fit: contain; border-radius: 12px; box-shadow: 0 0 50px rgba(0,0,0,.8); transform: scale(.95); transition: transform .3s ease; position: relative; z-index: 1; }
+    #m:target img { transform: scale(1); }
+    #c { position: absolute; top: 20px; right: 30px; color: #fff; font-size: 50px; text-decoration: none; opacity: .8; transition: opacity .3s; z-index: 2; pointer-events: auto; }
+    #c:hover { opacity: 1; }
+    #p, #n { position: absolute; color: #fff; font-size: 50px; top: 50%; transform: translateY(-50%); opacity: .7; transition: opacity .3s; z-index: 2; pointer-events: auto; }
+    #p { left: 30px; }
+    #n { right: 30px; }
+    #p:hover, #n:hover { opacity: 1; }
+    .cap { color: #f2f2f2; font-size: 20px; margin-top: 20px; text-align: center; opacity: 0; transition: opacity .3s; }
+    #m:target .cap { opacity: 1; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card" onclick="openModal(0)">
+      <img src="../../environment/attachments/team.webp" alt="Analytics Dashboard" loading="lazy">
+      <div class="label">Team</div>
+    </div>
+    <div class="card" onclick="openModal(1)">
+      <img src="../../environment/attachments/coin.webp" alt="Engagement Metrics" loading="lazy">
+      <div class="label">Token</div>
+    </div>
+    <div class="card" onclick="openModal(2)">
+      <img src="../../environment/attachments/analytics.png" alt="Analytics" loading="lazy">
+      <div class="label">Analytics</div>
+    </div>
+    <div class="card" onclick="openModal(3)">
+      <img src="../../environment/attachments/youtube.webp" alt="Youtube Analytics (Personal Channel)" loading="lazy">
+      <div class="label">YT analytics</div>
+    </div>
+    <div class="card" onclick="openModal(4)">
+      <img src="../../environment/attachments/DMS.webp" alt="DMs" loading="lazy">
+      <div class="label">DMs</div>
+    </div>
+  </main>
+  <div id="m" onclick="if(event.target.id === 'm') location.hash = ''">
+    <a id="c" onclick="location.hash = ''; return false">×</a>
+    <a id="p" onclick="changeSlide(-1); return false">‹</a>
+    <a id="n" onclick="changeSlide(1); return false">›</a>
+    <img id="f" alt="">
+    <div class="cap" id="t"></div>
+  </div>
+  <script>
+    const imageSources = ["../../environment/attachments/team.webp", "../../environment/attachments/coin.webp", "../../environment/attachments/analytics.png", "../../environment/attachments/youtube.webp", "../../environment/attachments/DMS.webp"];
+    const captions = ["Team (10k+ followers)", "Token Growth (5x)", "Twitter Metrics", "Youtube analytics (Personal Channel)", "DMS (Partial-Redaction)"];
+    let currentIndex = 0;
+    function openModal(n) {
+      currentIndex = n;
+      const f = document.getElementById('f');
+      f.src = imageSources[n];
+      f.alt = captions[n];
+      document.getElementById('t').textContent = captions[n];
+      location.hash = 'm';
+    }
+    function changeSlide(d) {
+      currentIndex = (currentIndex + d + imageSources.length) % imageSources.length;
+      openModal(currentIndex);
+    }
+    document.addEventListener('keydown', e => {
+      if (location.hash === '#m') {
+        if (e.key === 'ArrowLeft') changeSlide(-1);
+        else if (e.key === 'ArrowRight') changeSlide(1);
+        else if (e.key === 'Escape') location.hash = '';
+      }
+    });
+  </script>
+  </a>
+</body>
+</html>
