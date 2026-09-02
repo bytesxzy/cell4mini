@@ -1,0 +1,16 @@
+<REANIMATE> <SLUMBER> 20
+<PURE> package.path = "./?.lua;./?/init.lua;" .. package.path
+<PURE> RSI = RSI or require("rsi.kernel.cycle")
+<PURE> local ok, r = pcall(RSI.step)
+<WELL> not ok
+<PRINT> generation failed
+<PURE> print(r)
+<DONE>
+<WELL> ok and r.accepted
+<PRINT> retained an improvement
+<PURE> print(r.operator, r.change)
+<DONE>
+<WELL> ok and not r.accepted
+<PRINT> generation complete, champion unchanged
+<DONE>
+<DONE>

@@ -1,0 +1,23 @@
+[Unit]
+Description=CELL4 recursive self-improvement loop (Lua, no LLM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: the directory that contains run.lua, CELL2, main.lua and rsi/
+WorkingDirectory=/var/www/html/research-CHANGE-ME
+# Runs the CELL2 program through the transpiler; the transpiled loop calls rsi.kernel.cycle.step forever.
+# If you prefer to bypass the transpiler, use:  ExecStart=/usr/bin/lua run.lua loop 20
+ExecStart=/usr/bin/lua main.lua
+Restart=always
+RestartSec=15
+Nice=10
+# keep the loop from starving the web server
+CPUWeight=30
+User=www-data
+Group=www-data
+Environment=LUA_PATH=./?.lua;./?/init.lua;;
+
+[Install]
+WantedBy=multi-user.target

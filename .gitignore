@@ -1,0 +1,10 @@
+# runtime state produced by the RSI loop (kept on the server, not in git)
+rsi/state/
+rsi/versions/
+rsi/data/
+rsi/www/state.json
+rsi/www/progress.json
+rsi/www/lineage.jsonl
+# transpiler output
+source/execute.lua
+source/index.html
