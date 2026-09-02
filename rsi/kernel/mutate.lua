@@ -383,8 +383,20 @@ end
 function ops_impl.perturb_hyper(g, ctx)
   local rng = ctx.rng
   local p = g.policy
-  local choice = rng:int(1, 9)
-  if choice == 9 then
+  local choice = rng:int(1, 13)
+  if choice == 13 then
+    p.bidirectional = not p.bidirectional
+    return "bidirectional -> " .. tostring(p.bidirectional)
+  elseif choice == 12 then
+    p.binary_meet = not p.binary_meet
+    return "binary_meet -> " .. tostring(p.binary_meet)
+  elseif choice == 11 then
+    p.back_max_cost = math.max(4, math.min(12, (p.back_max_cost or 6) + rng:pick({ -2, 2 })))
+    return "back_max_cost -> " .. p.back_max_cost
+  elseif choice == 10 then
+    p.back_after_cost = math.max(1, math.min(7, (p.back_after_cost or 3) + rng:pick({ -1, 1 })))
+    return "back_after_cost -> " .. p.back_after_cost
+  elseif choice == 9 then
     p.two_phase = not p.two_phase
     return "two_phase -> " .. tostring(p.two_phase)
   elseif choice == 8 then

@@ -24,6 +24,9 @@ return {
   binary_meet = true,       -- deduce one argument of a binary operator from the other
   binary_meet_depth = 2,    -- only from backward entries at most this deep
   binary_meet_cap = 24,     -- cheapest forward candidates offered as the known argument
+  -- measured at +0.3pp (1 win, 0 losses, p=0.37) on 300 tasks: real but not evidence, so off
+  meet_replay = false,      -- replay the binary meet once the forward bank has grown
+  meet_replay_slack = 4,    -- extra cost the replay may spend, since its known argument is deeper
   two_phase = true,         -- try the narrow whitelist first, then fall back to the full operator set
   phase1_frac = 0.5,        -- share of the node budget given to the narrow phase
 }

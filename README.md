@@ -3,10 +3,12 @@
 An autonomous, LLM-free experimental system that tries to improve its own problem-solving architecture
 and only keeps a change when a skeptical evaluation harness finds real evidence for it.
 
-* **Intelligence:** a program-synthesis engine (`rsi/genome/search.lua`) that solves input→output tasks by
-  cost-guided bottom-up enumeration with observational equivalence, Probe-style just-in-time cost learning,
-  and a growing library of learned abstractions (DreamCoder-style). Written in plain Lua; runs under
-  Lua 5.4 or LuaJIT. No external model, no API in the reasoning path.
+* **Intelligence:** a program-synthesis engine (`rsi/genome/search.lua`) that solves input→output tasks
+  by **bidirectional** search: a forward bank built by cost-guided bottom-up enumeration with
+  observational equivalence and Probe-style just-in-time cost learning, meeting a backward bank built
+  by inverting the goal through the operators' inverse semantics (`rsi/kernel/inverses.lua`), plus a
+  growing library of learned abstractions (DreamCoder-style). Written in plain Lua; runs under Lua 5.4
+  or LuaJIT. No external model, no API in the reasoning path.
 * **Self-modification:** the genome (`rsi/genome/`) is mutable source: which primitives are visible, the
   learned library, the search policy (costs, constants, budgets, strategy) and the search code itself.
   Every generation the kernel derives candidates from the champion's own experimental evidence,
@@ -20,6 +22,65 @@ and only keeps a change when a skeptical evaluation harness finds real evidence 
 * **Orchestrator in your language:** `CELL2` is the top-level loop written in the CELL2 tag language and
   run through `main.lua` (your transpiler, with three small fixes). `<PURE>` is used only for the four
   lines that call into the kernel.
+
+## The reasoning engine
+
+Forward-only enumeration is blind. It spends the node budget on breadth and asks whether anything it
+built happens to equal the target, which is exactly the wrong purchase when branching factor is the
+measured bottleneck. Two mechanisms replace guessing with deduction:
+
+**Inverse semantics.** For 37 operators, `rsi/kernel/inverses.lua` answers: given a desired output,
+what input would produce it? If the target is a 90-degree rotation of something, rotating it back says
+precisely what the rest of the program must produce. Candidates are never trusted — the operator is
+applied forward and the candidate kept only if it reproduces the output on every training example.
+That makes liberal rules safe: `shift_down` is not injective, but shifting back verifies exactly when
+nothing fell off the edge. All 37 rules were checked against their forward operator on random inputs;
+none ever produced a candidate that survived to be used incorrectly.
+
+**Binary meet.** The plain rules cannot see an outer operator whose second argument is not a constant,
+which is the commonest compositional shape here — the input concatenated with a transform of itself, a
+grid beside its own mirror, one grid overlaid on another. Taking one argument from what the forward
+search can already build makes the other determined. This was justified by measurement first: across
+272 solved programs, **98.3% of binary applications have a leaf as the shallower argument and none has
+both arguments deep**, so pairing against cheap forward values is where the solutions actually live.
+
+Backward entries are counted against the same node budget as forward ones, so the comparison against a
+purely forward search is like for like — and the bidirectional engine wins while spending *fewer*
+nodes, not more.
+
+Two implementation details decided the outcome, both discovered by measurement rather than design:
+
+* Built eagerly, the backward bank **lost** 1.7pp. Depth-1 tasks paid for machinery they never needed
+  and ran out of wall-clock before the forward search began. It is now built lazily, only after the
+  forward search has exhausted every depth-1 program.
+* Scanning all ~105 operators per frontier entry dominated the runtime. Operators are now indexed by
+  return type, since only a minority are invertible.
+
+### Measured, on task sets never used for tuning
+
+| | forward-only | bidirectional | delta | p (bootstrap / sign) |
+|---|---|---|---|---|
+| set J (300) | 67.3% | 75.3% | +8.0pp | <0.0001 / <0.0001 |
+| set K (300) | 65.3% | 71.3% | +6.0pp | 0.0010 / 0.0015 |
+| set L (300) | 69.0% | 77.7% | +8.7pp | <0.0001 / <0.0001 |
+| **pooled** | **67.2%** | **74.8%** | **+7.6pp** | 85 wins, 17 losses |
+
+Mean search nodes per task fell from 1072 to 787. On the harness's own secret held-out split the
+champion went from 141/200 to 152/200. Binary meet was validated separately against
+bidirectional-without-it on four further independent sets (+2.3, +1.7, +1.7, +2.0 pp; 24 wins, 1 loss).
+
+### What was tried and did not work
+
+Reported because the negatives cost as much to establish as the positives, and a list of only
+successes would be a sales pitch:
+
+* **Replaying the binary meet against the grown forward bank**: +0.3pp, 1 win, 0 losses, p=0.37. Real
+  but not evidence. Shipped off (`meet_replay = false`).
+* **Lifting the cost ceiling** (`max_cost` 9 → 24): bit-for-bit identical results. The ceiling never
+  binds; the tasks that stop early with budget remaining have exhausted the *reachable value space*,
+  meaning they are out of the DSL's reach rather than cut short.
+* **Deepening the backward chain** (`back_max_cost` 6 → 9) and **widening the binary meet**
+  (`binary_meet_cap` 24 → 64, `binary_meet_depth` 2 → 4): all exactly flat. None of these limits binds.
 
 ## What actually improves, and how
 
@@ -116,19 +177,23 @@ same budget, which changes which programs get solved, which changes the next rou
 * **Task families are generated by the kernel.** Hidden operators and spawned variants keep the
   distribution moving, and external ARC tasks are real and never trained on, but the space is still a
   typed DSL over lists, integers and small grids.
-* **Scores go up only when evidence says so, and in this build they did not go up.** The final clean
-  run was 12 generations, 48 candidates, every one of the eleven operators exercised, a solution
-  corpus of 315, and **zero acceptances**. The champion held 141/200 throughout. The best candidate
-  was a task-conditioned prior at +2.0pp (bootstrap p=0.103, sign p=0.145, 6 wins against 2 losses),
-  correctly rejected. That is the honest state of the system as delivered: it searches a real space,
-  it measures itself against evidence it cannot see in advance, and so far nothing has cleared the
-  bar. A system that reported daily gains under this rule would be lying. The lineage table shows
-  every candidate, its delta, both p-values and why it failed.
+* **The engine improved; the autonomous loop still has not.** This distinction is the whole point and
+  it should not be blurred. The +7.6pp came from an *engineered* change to the search architecture,
+  proposed and verified by hand against independent task sets. The self-improvement loop's own
+  operators — library learning, abstraction, prior fitting, pruning — have still accepted **nothing**:
+  the last clean run was 12 generations, 48 candidates, all eleven operators exercised, a corpus of
+  315, zero acceptances, best candidate +2.0pp at p=0.103. So the honest summary is that the harness
+  works, the search engine got substantially stronger by ordinary engineering, and genuine *recursive*
+  self-improvement — the system finding changes of this size in itself — has not been demonstrated.
+  The new mechanisms are exposed to the mutation operators (`bidirectional`, `binary_meet`,
+  `back_max_cost`, `back_after_cost` are all perturbable), so the loop can now explore this part of
+  the design space too, but no claim is made that it will.
 
 ## What to expect when you run it
 
-The acceptance bar is deliberately demanding: on 200 held-out tasks a candidate needs roughly nine
-wins against at most one loss to reach p<0.05. Small true effects are invisible at that sample size,
+The champion starts at about 76% on its secret held-out split (was 70.5% before the bidirectional
+engine). The acceptance bar is deliberately demanding: on 200 held-out tasks a candidate needs roughly
+nine wins against at most one loss to reach p<0.05. Small true effects are invisible at that sample size,
 which is why the held-out split is large rather than the threshold loose. Two things change as it
 runs on your server that could not happen here: the solution corpus grows into the thousands, which
 is what the abstraction operators need, and the research fetcher pulls real ARC-AGI tasks into the

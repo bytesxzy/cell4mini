@@ -58,7 +58,7 @@ function M.solve(task, ctx)
   -- A backward entry maps a value-tuple the forward search might produce to a context that turns it
   -- into the target. Each step is verified by applying the operator forward to the candidate
   -- preimage, so reaching an entry is a solution by construction rather than a hypothesis.
-  local back, back_n = {}, 0
+  local back, back_n, back_entries = {}, 0, {}
   local function back_key(ty, vals)
     local parts = {}
     for i = 1, n do parts[i] = sig(vals[i]) end
@@ -78,7 +78,8 @@ function M.solve(task, ctx)
       build = function(node) return pb(P.node(name, mkargs(node))) end,
     }
     back[key] = e
-    nextf[#nextf + 1] = e
+    back_entries[#back_entries + 1] = e
+    if nextf then nextf[#nextf + 1] = e end
   end
 
   local function args_unary(node) return { node } end
@@ -103,12 +104,14 @@ function M.solve(task, ctx)
   end
 
   -- cheapest-first view of the forward bank, for the binary meet
-  local function forward_candidates(ty, cap)
+  -- min_cost lets the replay pass draw on material the first pass could not have seen: without it
+  -- the cheapest-first cap returns the same candidates every time and replaying deduces nothing.
+  local function forward_candidates(ty, cap, min_cost)
     local out = {}
     local byc = bank[ty]
     if not byc then return out end
     local costs = {}
-    for c in pairs(byc) do costs[#costs + 1] = c end
+    for c in pairs(byc) do if not min_cost or c >= min_cost then costs[#costs + 1] = c end end
     table.sort(costs)
     for _, c in ipairs(costs) do
       for _, en in ipairs(byc[c]) do
@@ -119,10 +122,62 @@ function M.solve(task, ctx)
     return out
   end
 
+  -- Binary meet: with one argument drawn from what the forward search can already build, the other
+  -- argument is determined. This is what reaches the compositional shapes -- concat of the input with
+  -- a transform of it, a grid beside its own mirror, one grid overlaid on another -- where neither
+  -- argument is a constant and the outer operator is therefore invisible to the plain inverse rules.
+  -- Restricted to shallow backward entries and to the cheapest forward candidates, because the
+  -- forward bank is large and this is quadratic in it.
+  local function binary_meet_over(list, nextf, budget, maxc, cap, min_cost)
+    if not policy.binary_meet then return end
+    local depth_limit = policy.binary_meet_depth or 2
+    local fcap = policy.binary_meet_cap or 24
+    for _, e in ipairs(list) do
+      if e.cost <= depth_limit then
+        for _, name in ipairs(inv_by_ret[e.ty] or {}) do
+          local p = prims[name]
+          if #p.t == 2 then
+            for slot = 1, 2 do
+              local rule = (slot == 2) and INV.inv_arg2[name] or INV.inv_arg1[name]
+              local known_ty = (slot == 2) and p.t[1] or p.t[2]
+              local hole_ty = (slot == 2) and p.t[2] or p.t[1]
+              if rule then
+                for _, fc in ipairs(forward_candidates(known_ty, fcap, min_cost)) do
+                  if nodes >= budget or back_n >= cap then return end
+                  local nc = e.cost + cost[name] + fc.cost
+                  if nc <= maxc then
+                    local cand, ok = {}, true
+                    for i = 1, n do
+                      local known = fc.entry.outs[i]
+                      local ok2, v = pcall(rule, e.vals[i], known)
+                      if not ok2 or v == nil then ok = false break end
+                      local ok3, chk
+                      if slot == 2 then ok3, chk = pcall(p.f, known, v) else ok3, chk = pcall(p.f, v, known) end
+                      if not ok3 or not equal(chk, e.vals[i]) then ok = false break end
+                      cand[i] = v
+                    end
+                    if ok then
+                      local sib = fc.entry.node
+                      local mk = (slot == 2)
+                        and function(node) return { sib, node } end
+                        or function(node) return { node, sib } end
+                      add_back(cand, hole_ty, nc, e, name, mk, nextf)
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
   local function build_back(allow, budget)
     inv_by_ret = index_inverses(allow)
     local root = { vals = targets, ty = out_type, cost = 0, build = function(node) return node end }
     back[back_key(out_type, targets)] = root
+    back_entries[#back_entries + 1] = root
     -- an integer-valued forward program can answer a colour-typed task and the other way round
     local alt = (out_type == "C" and "I") or (out_type == "I" and "C") or nil
     if alt then back[back_key(alt, targets)] = root end
@@ -170,53 +225,7 @@ function M.solve(task, ctx)
           end
         end
       end
-      -- Binary meet: with one argument drawn from what the forward search can already build, the
-      -- other argument is determined. This is what reaches the compositional shapes -- concat of the
-      -- input with a transform of it, a grid beside its own mirror, one grid overlaid on another --
-      -- where neither argument is a constant and the outer operator is therefore invisible to the
-      -- plain inverse rules. Restricted to shallow backward entries and to the cheapest forward
-      -- candidates, because the forward bank is large and this is quadratic in it.
-      if policy.binary_meet then
-        for _, e in ipairs(frontier_in) do
-          if e.cost <= (policy.binary_meet_depth or 2) then
-            for _, name in ipairs(inv_by_ret[e.ty] or {}) do
-              local p = prims[name]
-              if #p.t == 2 then
-                for slot = 1, 2 do
-                  local rule = (slot == 2) and INV.inv_arg2[name] or INV.inv_arg1[name]
-                  local known_ty = (slot == 2) and p.t[1] or p.t[2]
-                  local hole_ty = (slot == 2) and p.t[2] or p.t[1]
-                  if rule then
-                    for _, fc in ipairs(forward_candidates(known_ty, policy.binary_meet_cap or 24)) do
-                      if nodes >= budget or back_n >= cap then return end
-                      local nc = e.cost + cost[name] + fc.cost
-                      if nc <= maxc then
-                        local cand, ok = {}, true
-                        for i = 1, n do
-                          local known = fc.entry.outs[i]
-                          local ok2, v = pcall(rule, e.vals[i], known)
-                          if not ok2 or v == nil then ok = false break end
-                          local ok3, chk
-                          if slot == 2 then ok3, chk = pcall(p.f, known, v) else ok3, chk = pcall(p.f, v, known) end
-                          if not ok3 or not equal(chk, e.vals[i]) then ok = false break end
-                          cand[i] = v
-                        end
-                        if ok then
-                          local sib = fc.entry.node
-                          local mk = (slot == 2)
-                            and function(node) return { sib, node } end
-                            or function(node) return { node, sib } end
-                          add_back(cand, hole_ty, nc, e, name, mk, nextf)
-                        end
-                      end
-                    end
-                  end
-                end
-              end
-            end
-          end
-        end
-      end
+      binary_meet_over(frontier_in, nextf, budget, maxc, cap)
       frontier = nextf
       if #frontier == 0 then break end
     end
@@ -241,11 +250,25 @@ function M.solve(task, ctx)
   -- ran out of wall-clock before the forward search started. Deferring it until the forward search
   -- has exhausted every depth-1 program (all of which have cost <= 3) makes the investment conditional
   -- on the task actually being hard.
-  local back_built = false
+  local back_built, meet_replayed = false, false
   local function maybe_build_back(allow)
     if back_built or not (policy.bidirectional and INV) then return nil end
     back_built = true
     build_back(allow, math.min(budget, nodes + math.floor(total_budget * (policy.back_frac or 0.25))))
+    return sweep_bank()
+  end
+
+  -- The binary meet can only pair with forward values that existed when it ran, and it runs early,
+  -- when the bank holds little more than the input and the depth-1 programs. Replaying it once the
+  -- bank has grown lets it deduce arguments it could not have seen the first time.
+  local function maybe_replay_meet(allow)
+    if meet_replayed or back_built == false or not (policy.bidirectional and INV) then return nil end
+    if not policy.meet_replay then return nil end
+    meet_replayed = true
+    binary_meet_over(back_entries, nil,
+      math.min(budget, nodes + math.floor(total_budget * (policy.back_frac or 0.25))),
+      (policy.back_max_cost or 6) + (policy.meet_replay_slack or 4), policy.back_cap or 400,
+      (policy.back_after_cost or 3) + 1)
     return sweep_bank()
   end
 
@@ -331,6 +354,10 @@ function M.solve(task, ctx)
   for C = 2, policy.max_cost do
     if C > (policy.back_after_cost or 3) then
       local s = maybe_build_back(allow)
+      if s then return { program = s, nodes = nodes, partial = 1 } end
+    end
+    if C > (policy.back_after_cost or 3) + 2 then
+      local s = maybe_replay_meet(allow)
       if s then return { program = s, nodes = nodes, partial = 1 } end
     end
     level_partials = {}
