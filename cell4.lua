@@ -5889,6 +5889,31 @@ os.execute("lua source/execute.lua")
 
 end
 
+-- Every path in this program is relative to the working directory: cfg.root is "rsi", and live.json
+-- is written into the current directory. A scheduler that runs `lua /path/to/cell4.lua` WITHOUT
+-- cd-ing there first therefore starts a second, empty installation wherever cron happens to put it,
+-- reports generation 1 forever, and leaves the real state untouched and unadvanced. That looks
+-- exactly like "the program resets every time it runs", so refuse rather than do it quietly. State
+-- beside the script but not under the working directory is the signature of that mistake.
+local function require_correct_cwd()
+  local dir = (arg[0] or ""):match("^(.*)/[^/]+$")
+  if not dir or dir == "" or dir == "." then return end
+  local here = io.open("rsi/state/state.json", "r")
+  if here then here:close() return end
+  local there = io.open(dir .. "/rsi/state/state.json", "r")
+  if not there then return end
+  there:close()
+  io.stderr:write("refusing to run: persisted state exists at " .. dir .. "/rsi/state/state.json,\n")
+  io.stderr:write("but the working directory is elsewhere, so this run would start an empty\n")
+  io.stderr:write("installation at generation 1 and leave the real one untouched.\n")
+  io.stderr:write("schedule it as:  cd " .. dir .. " && lua cell4.lua\n")
+  os.exit(1)
+end
+
+-- Checked before anything below can create rsi/ in the wrong place. `transpile` is exempt: it works
+-- on whatever directory it was pointed at and has nothing to do with the RSI state.
+if not (arg and (arg[1] == "transpile" or arg[1] == "main")) then require_correct_cwd() end
+
 do
   local function _write_if_missing(path, src)
     local f = io.open(path, "r")
