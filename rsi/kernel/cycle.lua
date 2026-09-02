@@ -321,6 +321,9 @@ function M.run_generation(opts)
     out.accepted, out.operator, out.change = true, best.op, best.desc
   end
 
+  local pruned = lineage.prune(ROOT, gen, 50)
+  if pruned > 0 then log(state, string.format("  pruned %d rejected candidate snapshots older than generation %d", pruned, gen - 50)) end
+
   out.heldout = champ_r.heldout.solve_rate
   benchmarks.save(bench)
   save_state(state)
