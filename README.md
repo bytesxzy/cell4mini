@@ -140,8 +140,14 @@ lua run.lua loop 20     # forever
 lua run.lua status      # state summary
 lua run.lua eval        # evaluate the champion on fresh splits (no mutation)
 lua run.lua research    # force a research fetch
+lua run.lua selftest    # verify the external ARC benchmark path end to end
 lua main.lua            # the CELL2 way: transpiles CELL2 -> source/execute.lua and runs the loop
 ```
+
+`selftest` writes two ARC-format tasks to a temp directory, loads them through the same code path the
+real fetcher feeds, solves them and verifies on their held-out test example. Run it after deploying:
+it confirms the external benchmark works before any real ARC data has been fetched. It never writes
+to `rsi/data/arc`, so the real benchmark cannot be polluted with synthetic tasks.
 
 Console: open `rsi/www/index.html` from a web server (it polls `state.json`, `progress.json`,
 `lineage.jsonl`).

@@ -18,7 +18,13 @@ EOF
 # block indexing and hide sources that should not be served
 cat > "$TARGET/.htaccess" <<'EOF'
 Options -Indexes
-Header set X-Robots-Tag "noindex, nofollow"
+# mod_headers may not be enabled; an unguarded Header directive 500s the whole directory
+<IfModule mod_headers.c>
+  Header set X-Robots-Tag "noindex, nofollow"
+  <FilesMatch "\.(json|jsonl)$">
+    Header set Cache-Control "no-store"
+  </FilesMatch>
+</IfModule>
 <FilesMatch "\.(lua|jsonl)$">
   Require all denied
 </FilesMatch>
