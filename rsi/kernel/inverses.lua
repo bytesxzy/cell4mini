@@ -117,6 +117,86 @@ M.inv2 = {
   shift_right = function(o, k) return G.shift_right(o, -k) end,
 }
 
+-- Binary meet. For an operator of two non-constant arguments, one argument taken from the forward
+-- bank determines what the other must be: if the target is a wide grid and the left part is
+-- something the search already knows how to build, the right part is fully determined. These rules
+-- are also candidates only, and are verified forward exactly like the others.
+local function grid_cols(g, c1, c2)
+  if c1 > c2 or c1 < 1 or c2 > g.w then return nil end
+  local o = { h = g.h, w = c2 - c1 + 1 }
+  for r = 1, g.h do
+    local row = {}
+    for c = c1, c2 do row[c - c1 + 1] = g[r][c] end
+    o[r] = row
+  end
+  return o
+end
+
+local function grid_rows(g, r1, r2)
+  if r1 > r2 or r1 < 1 or r2 > g.h then return nil end
+  local o = { h = r2 - r1 + 1, w = g.w }
+  for r = r1, r2 do
+    local row = {}
+    for c = 1, g.w do row[c] = g[r][c] end
+    o[r - r1 + 1] = row
+  end
+  return o
+end
+
+-- inv_arg2[name](o, a) -> the second argument b such that f(a, b) = o
+M.inv_arg2 = {
+  hcat = function(o, a) if o.h ~= a.h or a.w >= o.w then return nil end return grid_cols(o, a.w + 1, o.w) end,
+  vcat = function(o, a) if o.w ~= a.w or a.h >= o.h then return nil end return grid_rows(o, a.h + 1, o.h) end,
+  concat = function(o, a)
+    if #a >= #o then return nil end
+    local b = {}
+    for i = #a + 1, #o do b[#b + 1] = o[i] end
+    return b
+  end,
+  zip_add = function(o, a)
+    if #o ~= #a then return nil end
+    local b = {}
+    for i = 1, #o do b[i] = o[i] - a[i] end
+    return b
+  end,
+  -- overlay takes b's non-zero cells over a, so where the target already agrees with a the second
+  -- argument may be zero, and where it differs it is pinned to the target
+  overlay = function(o, a)
+    if o.h ~= a.h or o.w ~= a.w then return nil end
+    local b = ops.grid(o.h, o.w, 0)
+    for r = 1, o.h do
+      for c = 1, o.w do if o[r][c] ~= a[r][c] then b[r][c] = o[r][c] end end
+    end
+    return b
+  end,
+}
+
+-- inv_arg1[name](o, b) -> the first argument a such that f(a, b) = o
+M.inv_arg1 = {
+  hcat = function(o, b) if o.h ~= b.h or b.w >= o.w then return nil end return grid_cols(o, 1, o.w - b.w) end,
+  vcat = function(o, b) if o.w ~= b.w or b.h >= o.h then return nil end return grid_rows(o, 1, o.h - b.h) end,
+  concat = function(o, b)
+    if #b >= #o then return nil end
+    local a = {}
+    for i = 1, #o - #b do a[i] = o[i] end
+    return a
+  end,
+  zip_add = function(o, b)
+    if #o ~= #b then return nil end
+    local a = {}
+    for i = 1, #o do a[i] = o[i] - b[i] end
+    return a
+  end,
+  overlay = function(o, b)
+    if o.h ~= b.h or o.w ~= b.w then return nil end
+    local a = ops.copy_grid(o)
+    for r = 1, o.h do
+      for c = 1, o.w do if b[r][c] ~= 0 then a[r][c] = 0 end end
+    end
+    return a
+  end,
+}
+
 function M.count()
   local a, b = 0, 0
   for _ in pairs(M.inv1) do a = a + 1 end

@@ -21,6 +21,9 @@ return {
   back_max_cost = 6,        -- deepest backward chain, in the same cost units as the forward search
   back_after_cost = 3,      -- build it only once forward search past this cost level has failed
   back_cap = 400,           -- max backward entries
+  binary_meet = true,       -- deduce one argument of a binary operator from the other
+  binary_meet_depth = 2,    -- only from backward entries at most this deep
+  binary_meet_cap = 24,     -- cheapest forward candidates offered as the known argument
   two_phase = true,         -- try the narrow whitelist first, then fall back to the full operator set
   phase1_frac = 0.5,        -- share of the node budget given to the narrow phase
 }

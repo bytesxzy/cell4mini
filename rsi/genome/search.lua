@@ -65,22 +65,23 @@ function M.solve(task, ctx)
     return ty .. "|" .. table.concat(parts, ";")
   end
 
-  local function add_back(vals, ty, c, parent, name, kconst, nextf)
+  -- mkargs turns the hole into the operator's full argument list, so the same routine serves unary
+  -- inverses, inverses with a constant second argument, and both hole positions of a binary meet.
+  local function add_back(vals, ty, c, parent, name, mkargs, nextf)
     local key = back_key(ty, vals)
     if back[key] then return end
     nodes = nodes + 1
     back_n = back_n + 1
     local pb = parent.build
-    local build
-    if kconst then
-      build = function(node) return pb(P.node(name, { node, kconst })) end
-    else
-      build = function(node) return pb(P.node(name, { node })) end
-    end
-    local e = { vals = vals, ty = ty, cost = c, build = build }
+    local e = {
+      vals = vals, ty = ty, cost = c,
+      build = function(node) return pb(P.node(name, mkargs(node))) end,
+    }
     back[key] = e
     nextf[#nextf + 1] = e
   end
+
+  local function args_unary(node) return { node } end
 
   -- Only a minority of operators are invertible. Scanning the whole DSL for every frontier entry was
   -- the dominant cost of the backward bank; indexing by return type cuts that loop by an order of
@@ -92,12 +93,30 @@ function M.solve(task, ctx)
     for _, name in ipairs(order) do
       local p = prims[name]
       local has = (INV.inv1[name] and #p.t == 1) or (INV.inv2[name] and #p.t == 2)
+        or ((INV.inv_arg1[name] or INV.inv_arg2[name]) and #p.t == 2)
       if has and not (p.bucket and p.bucket ~= feat_bucket) and not (allow and not allow[name]) then
         idx[p.r] = idx[p.r] or {}
         table.insert(idx[p.r], name)
       end
     end
     return idx
+  end
+
+  -- cheapest-first view of the forward bank, for the binary meet
+  local function forward_candidates(ty, cap)
+    local out = {}
+    local byc = bank[ty]
+    if not byc then return out end
+    local costs = {}
+    for c in pairs(byc) do costs[#costs + 1] = c end
+    table.sort(costs)
+    for _, c in ipairs(costs) do
+      for _, en in ipairs(byc[c]) do
+        out[#out + 1] = { entry = en, cost = c }
+        if #out >= cap then return out end
+      end
+    end
+    return out
   end
 
   local function build_back(allow, budget)
@@ -112,6 +131,7 @@ function M.solve(task, ctx)
     local cap = policy.back_cap or 400
     for _ = 1, maxc do
       local nextf = {}
+      local frontier_in = frontier
       for _, e in ipairs(frontier) do
         for _, name in ipairs(inv_by_ret[e.ty] or {}) do
           if nodes >= budget or back_n >= cap then return end
@@ -129,7 +149,7 @@ function M.solve(task, ctx)
                   if not ok3 or not equal(chk, e.vals[i]) then ok = false break end
                   cand[i] = v
                 end
-                if ok then add_back(cand, p.t[1], nc, e, name, nil, nextf) end
+                if ok then add_back(cand, p.t[1], nc, e, name, args_unary, nextf) end
               elseif k2 and #p.t == 2 then
                 for _, kv in ipairs(policy.consts[p.t[2]] or {}) do
                   local cand, ok = {}, true
@@ -140,7 +160,57 @@ function M.solve(task, ctx)
                     if not ok3 or not equal(chk, e.vals[i]) then ok = false break end
                     cand[i] = v
                   end
-                  if ok then add_back(cand, p.t[1], nc, e, name, P.const(kv, p.t[2]), nextf) end
+                  if ok then
+                    local kn = P.const(kv, p.t[2])
+                    add_back(cand, p.t[1], nc, e, name, function(node) return { node, kn } end, nextf)
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+      -- Binary meet: with one argument drawn from what the forward search can already build, the
+      -- other argument is determined. This is what reaches the compositional shapes -- concat of the
+      -- input with a transform of it, a grid beside its own mirror, one grid overlaid on another --
+      -- where neither argument is a constant and the outer operator is therefore invisible to the
+      -- plain inverse rules. Restricted to shallow backward entries and to the cheapest forward
+      -- candidates, because the forward bank is large and this is quadratic in it.
+      if policy.binary_meet then
+        for _, e in ipairs(frontier_in) do
+          if e.cost <= (policy.binary_meet_depth or 2) then
+            for _, name in ipairs(inv_by_ret[e.ty] or {}) do
+              local p = prims[name]
+              if #p.t == 2 then
+                for slot = 1, 2 do
+                  local rule = (slot == 2) and INV.inv_arg2[name] or INV.inv_arg1[name]
+                  local known_ty = (slot == 2) and p.t[1] or p.t[2]
+                  local hole_ty = (slot == 2) and p.t[2] or p.t[1]
+                  if rule then
+                    for _, fc in ipairs(forward_candidates(known_ty, policy.binary_meet_cap or 24)) do
+                      if nodes >= budget or back_n >= cap then return end
+                      local nc = e.cost + cost[name] + fc.cost
+                      if nc <= maxc then
+                        local cand, ok = {}, true
+                        for i = 1, n do
+                          local known = fc.entry.outs[i]
+                          local ok2, v = pcall(rule, e.vals[i], known)
+                          if not ok2 or v == nil then ok = false break end
+                          local ok3, chk
+                          if slot == 2 then ok3, chk = pcall(p.f, known, v) else ok3, chk = pcall(p.f, v, known) end
+                          if not ok3 or not equal(chk, e.vals[i]) then ok = false break end
+                          cand[i] = v
+                        end
+                        if ok then
+                          local sib = fc.entry.node
+                          local mk = (slot == 2)
+                            and function(node) return { sib, node } end
+                            or function(node) return { node, sib } end
+                          add_back(cand, hole_ty, nc, e, name, mk, nextf)
+                        end
+                      end
+                    end
+                  end
                 end
               end
             end
