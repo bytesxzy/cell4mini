@@ -10,7 +10,14 @@ lua run.lua selftest   # end-to-end check of the external ARC benchmark path (ta
 lua run.lua eval       # score the champion on fresh splits without mutating anything
 lua run.lua step       # exactly one generation
 lua run.lua status     # what has happened so far
+lua run.lua narrate    # replay the last generation's account, a word at a time
+lua run.lua history    # print the whole narrated history
 ```
+
+`narrate` is the one to watch. It is a procedural generator over audited measurements, **not a
+language model** — it cannot say anything that is not a real number in the run — and it corrects
+itself in the open if a fact fails recomputation. `selftest` deliberately corrupts a field to prove
+that guard is real.
 
 `eval` is the quickest way to see the engine working. Expect roughly:
 
@@ -33,6 +40,7 @@ split is large rather than the acceptance threshold loose.
 | `rsi/data/corpus.jsonl` | the training data — every task it has ever solved, with the program it found and the one the generator used |
 | `rsi/data/journal.jsonl` | the same milestones, machine-readable |
 | `rsi/state/lineage.jsonl` | every candidate ever tried and exactly why it was refused |
+| `HISTORY.md` | the system's own account in English, newest first — try `lua run.lua narrate` to watch it typed out |
 
 ## Watching the console
 

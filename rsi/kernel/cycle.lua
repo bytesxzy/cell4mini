@@ -15,6 +15,7 @@ local dashboard = require("rsi.kernel.dashboard")
 local features = require("rsi.kernel.features")
 local challenge = require("rsi.kernel.challenge")
 local journal = require("rsi.kernel.journal")
+local narrator = require("rsi.kernel.narrator")
 local M = {}
 
 local ROOT = cfg.root
@@ -301,6 +302,7 @@ function M.run_generation(opts)
     corpus = state.corpus, near_corpus = state.near_corpus }
   local best = nil
   local used = {}
+  local narrated_candidates = {}
   for k = 1, cfg.candidates_per_gen do
     local cand_g, op, desc = mutate.make_candidate(champ_g, ctx, state.meta, used)
     if not cand_g then log(state, "no applicable mutation operator") break end
@@ -349,6 +351,7 @@ function M.run_generation(opts)
         adversarial = cand_r.adversarial, train = cand_r.train })
     end)
     pcall(lineage.record, ROOT, entry)
+    narrated_candidates[#narrated_candidates + 1] = entry
     log(state, string.format("  candidate %d [%s] %s -> %s: %s", k, op, desc, accepted and "ACCEPT" or "reject", reason))
     if accepted and (not best or (cand_r.heldout.solve_rate > best.r.heldout.solve_rate)) then
       best = { g = cand_g, loaded = loaded, r = cand_r, op = op, desc = desc, dir = dir, entry = entry }
@@ -400,6 +403,29 @@ function M.run_generation(opts)
       challenge = ranking, saturated = saturated, heldout_epoch = bench.heldout_epoch,
     })
     if not ok_j then io.stderr:write("journal render failed: " .. tostring(err_j) .. "\n") end
+  end
+
+  -- The narration. Written every generation with no typing delay so the loop is not slowed by it;
+  -- `lua run.lua narrate` replays the latest entry a word at a time.
+  do
+    local ok_n, res = pcall(narrator.narrate, {
+      gen = gen, fingerprint = genome.fingerprint(champ_g),
+      heldout = champ_r.heldout, adversarial = champ_r.adversarial,
+      regression = champ_r.regression, external = champ_r.external,
+      candidates = narrated_candidates, accepted = best ~= nil,
+      corpus_size = journal.corpus_size(ROOT), library_size = #champ_g.lib,
+      challenge = ranking, saturated = saturated,
+      accepted_total = state.accepted_total, candidates_total = state.candidates_total,
+    }, { quiet = true, seed = "narrate:" .. gen })
+    if ok_n then
+      pcall(narrator.record, ROOT, res)
+      pcall(narrator.render_history, ROOT)
+      if res.corrections and #res.corrections > 0 then
+        log(state, string.format("  narrator corrected %d fact(s) against recomputation", #res.corrections))
+      end
+    else
+      io.stderr:write("narration failed: " .. tostring(res) .. "\n")
+    end
   end
 
   local pruned = lineage.prune(ROOT, gen, 50)

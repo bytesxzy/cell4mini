@@ -139,6 +139,8 @@ Three files, answering different questions:
 | `rsi/data/journal.jsonl` | the milestones: accepted changes with evidence, benchmark rotations, research fetches. |
 | `JOURNAL.md` | the same, rendered for a human, regenerated every generation. |
 | `rsi/state/lineage.jsonl` | every candidate ever tried and why it was refused. |
+| `HISTORY.md` | the narrated account, newest first — what happened and what it meant, readable start to finish. |
+| `rsi/data/narrative.jsonl` | the same, machine-readable, with each entry's audit result and any corrections. |
 
 The generator's own expression is recorded in the corpus for the reader; the solver is handed
 `tasks.solver_view`, which omits it along with the test examples.
@@ -155,6 +157,45 @@ This is keyword matching against an explicit list. It is **not** comprehension �
 here to read anything — and the console says so in those words. The registry's real value is the
 second field: without a record of what was tried and failed, the system would happily re-propose the
 same losing ideas and a reader would have no way to tell an untried idea from a tried one.
+
+## The narrator
+
+`rsi/kernel/narrator.lua` writes the system's account of itself in English, appended to
+`rsi/data/narrative.jsonl` and rendered to `HISTORY.md`. `lua run.lua narrate` replays the latest
+entry a word at a time.
+
+**It is not a language model, and the code says so in those words.** There is no network, no training
+on text, no external call, and it cannot state anything that is not already a measured number in this
+system. It is a procedural generator: the phrasing is chosen from equivalent forms by a seeded RNG,
+and the content is pinned to audited facts. Calling it an LM would be the same overclaim this project
+has refused everywhere else.
+
+What makes it trustworthy is not care, it is a mechanism. Every sentence declares which facts it
+uses. Those facts are gathered once from the run's results and then **independently recomputed from
+the raw per-task vectors** before the sentence is allowed to stand. On disagreement the sentence is
+printed, struck in the open, and reissued with the corrected value, and the correction is written into
+the history beside it. So a bug in the gathering surfaces as a visible correction rather than as a
+confident falsehood. That is what "writes and corrects itself" means here — a real consistency check
+with a visible outcome, not a typing animation.
+
+You can verify the guard yourself rather than taking my word for it: `lua run.lua selftest` corrupts a
+summary field to `9999`, and the narrator has to catch it from the per-task vector, recompute it to
+the true value, and keep the false number out of the text it asserts. The selftest fails loudly if it
+does not.
+
+Capitals fire only where a stated rule does — a result significant under both tests, a regression
+loss, a saturated benchmark, a new champion — at most three spans per narration, spent on the
+highest-significance events first, so they keep meaning something:
+
+```
+Generation 12: 168 solved out of 200 held-out tasks (84.0%).
+NEW CHAMPION: fit_conditional_ops gained +5.5pp and cleared both tests, so I kept it.
+1 candidate LOST GROUND on the regression suite, breaking something an earlier champion could already do.
+grid_d1 is SATURATED -- I solve it almost every time and it no longer tells candidates apart -- so a harder variant was spawned from it.
+```
+
+Narration during a generation runs with zero typing delay so the loop is not slowed by its own
+commentary; the delay is only applied when you ask for it with `narrate`.
 
 ## What actually improves, and how
 

@@ -39,6 +39,8 @@ M.implemented = {
     where = "rsi/genome/search.lua: two_phase" },
   { name = "automatic curriculum", keys = { "curriculum", "task generation", "self-play", "procedural generation" },
     where = "rsi/kernel/benchmarks.lua: variant spawning" },
+  { name = "grounded natural-language report", keys = { "grounded generation", "data-to-text", "template generation", "faithfulness", "hallucination" },
+    where = "rsi/kernel/narrator.lua: procedural, audited, NOT a language model" },
 }
 
 -- Measured and discarded. Each entry carries the number that killed it, so it is not re-proposed.
