@@ -3,6 +3,7 @@
 local json = require("rsi.kernel.json")
 local tasks = require("rsi.kernel.tasks")
 local RNG = require("rsi.kernel.rng")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 local function now_salt()
@@ -19,7 +20,7 @@ function M.load(root)
       -- the installation's latent world: which motifs recur across every split
       world_salt = now_salt(), motif_epoch = 1,
     }
-    os.execute("mkdir -p '" .. root .. "/state'")
+    plat.mkdirp(root .. "/state")
     json.write(path, s)
   end
   -- register generated family variants
@@ -180,10 +181,8 @@ end
 function M.load_external(root, cap)
   local dir = root .. "/data/arc"
   local list = {}
-  local p = io.popen("ls '" .. dir .. "' 2>/dev/null")
-  if p then
-    for name in p:lines() do if name:match("%.json$") then list[#list + 1] = name end end
-    p:close()
+  do
+    for _, name in ipairs(plat.ls(dir)) do if name:match("%.json$") then list[#list + 1] = name end end
   end
   table.sort(list)
   local out = {}

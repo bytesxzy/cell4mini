@@ -23,6 +23,7 @@
 -- narration, spent on the highest-significance events first, so capitals keep meaning something.
 local RNG = require("rsi.kernel.rng")
 local json = require("rsi.kernel.json")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 M.CAPS_BUDGET = 3
@@ -251,11 +252,9 @@ end
 
 -- ---------------------------------------------------------------- output
 
-local sleep_works = nil
 local function nap(seconds)
-  if seconds <= 0 or sleep_works == false then return end
-  local ok = os.execute("sleep " .. seconds)
-  if sleep_works == nil then sleep_works = (ok == true or ok == 0) end
+  if seconds <= 0 then return end
+  plat.sleep(seconds)
 end
 
 -- Type it out a word at a time. `delay` of 0 prints instantly, which is what the loop uses so a
@@ -317,6 +316,8 @@ end
 
 function M.record(root, entry)
   json.append_line(root .. "/data/narrative.jsonl", entry)
+  -- Mirrored into www/ so the static pages can read it over HTTP without exposing rsi/data.
+  json.append_line(root .. "/www/narrative.jsonl", entry)
 end
 
 function M.render_history(root)
@@ -325,14 +326,19 @@ function M.render_history(root)
   local function w(s) out[#out + 1] = s end
   w("# CELL4 history")
   w("")
-  w("The system's own account of what happened, newest first. Written by")
-  w("`rsi/kernel/narrator.lua`, which is a procedural generator over audited measurements -- **not a")
-  w("language model**: there is no network, no training on text, no external call, and it cannot")
-  w("state anything that is not a measured number. Phrasing varies; content does not.")
+  w("The system's own account of what happened, newest first.")
   w("")
-  w("Every sentence declares the facts it uses, and those facts are recomputed from the raw results")
-  w("before the sentence is allowed to stand. Where a recomputation disagreed, the correction is")
-  w("recorded below the entry rather than quietly applied.")
+  w("The wording comes from `rsi/lm/markov.lua`, an n-gram Markov **language model** trained by")
+  w("counting on `rsi/lm/corpus.txt` and sampled with backoff -- the pre-neural kind of language")
+  w("model: no network, no gradient, no external service. When no sampled sentence passes")
+  w("verification, the deterministic template generator in `rsi/kernel/narrator.lua` writes that")
+  w("sentence instead, and the entry says which produced what.")
+  w("")
+  w("**No number here comes from the model.** Its vocabulary contains no numerals at all; every")
+  w("quantity arrives through a slot filled from audited measurements after sampling, and any")
+  w("sentence carrying a numeral the facts do not contain is discarded and re-drawn. Those facts are")
+  w("recomputed from the raw results before a sentence is allowed to stand. Where a recomputation")
+  w("disagreed, the correction is recorded below the entry rather than quietly applied.")
   w("")
   w("Capitals mark events by rule, not for decoration: a result significant under both tests, a")
   w("regression loss, a saturated benchmark, a new champion.")
@@ -341,7 +347,18 @@ function M.render_history(root)
     local e = all[i]
     w(string.format("## Generation %d — %s", e.gen or 0, os.date("!%Y-%m-%d %H:%M UTC", e.time or 0)))
     w("")
-    for _, s in ipairs(e.sentences or {}) do w(s) end
+    if e.generator == "markov" then
+      w(string.format("*n-gram Markov LM, seed `%s`, %d sentence(s) sampled and %d from the template fallback.*",
+        tostring(e.seed), e.from_chain or 0, e.from_template or 0))
+    else
+      w("*Template generator only: no LM corpus was available for this entry.*")
+    end
+    w("")
+    -- A sentence the chain could not produce is marked, so the fallback rate is visible here too.
+    for i, s in ipairs(e.sentences or {}) do
+      local src = e.provenance and e.provenance[i]
+      w(s .. ((src == "template") and " *[template]*" or ""))
+    end
     w("")
     if e.corrections and #e.corrections > 0 then
       for _, c in ipairs(e.corrections) do

@@ -6,10 +6,12 @@
 --   lua run.lua eval            evaluate the champion on fresh splits without mutating anything
 --   lua run.lua narrate [delay] replay the latest generation's account, a word at a time
 --   lua run.lua history         print the whole narrated history
+--   lua run.lua lm [topic]      language-model stats, and sample sentences for a topic
 --   lua run.lua selftest        verify the external ARC benchmark path end to end
 package.path = "./?.lua;./?/init.lua;" .. package.path
 local cmd = arg[1] or "step"
 local cycle = require("rsi.kernel.cycle")
+local plat = require("rsi.kernel.plat")
 
 if cmd == "step" then
   local ok, r = pcall(cycle.step)
@@ -23,7 +25,7 @@ elseif cmd == "loop" then
   while true do
     local ok, err = pcall(cycle.step)
     if not ok then io.stderr:write("generation failed: " .. tostring(err) .. "\n") end
-    os.execute("sleep " .. pause)
+    plat.sleep(pause)
   end
 elseif cmd == "status" then
   local state, bench = cycle.status()
@@ -64,6 +66,12 @@ elseif cmd == "narrate" then
     os.exit(1)
   end
   print(string.format("generation %d, narrated %s", e.gen or 0, os.date("!%Y-%m-%d %H:%M UTC", e.time or 0)))
+  if e.generator == "markov" then
+    print(string.format("written by the n-gram Markov LM (seed %s): %d sentences from the chain, %d from the template fallback",
+      tostring(e.seed), e.from_chain or 0, e.from_template or 0))
+  else
+    print("written by the template narrator (no LM corpus was available)")
+  end
   print("")
   for _, s in ipairs(e.sentences or {}) do narrator.stream("  " .. s, delay) end
   if e.corrections and #e.corrections > 0 then
@@ -72,6 +80,33 @@ elseif cmd == "narrate" then
       print(string.format("  (corrected while writing: %s was stated as %s, recomputed to %s)",
         c.key, tostring(c.stated), tostring(c.actual)))
     end
+  end
+elseif cmd == "lm" then
+  local markov = require("rsi.lm.markov")
+  local gen = require("rsi.lm.generate")
+  local RNG = require("rsi.kernel.rng")
+  local m, err = gen.load()
+  if not m then print("cannot load corpus: " .. tostring(err)) os.exit(1) end
+  local st = m:stats()
+  print(string.format("n-gram Markov model: order %d, %d training lines, %d topics, %d vocabulary, %d contexts",
+    st.order, st.lines, st.topics, st.vocab, st.contexts))
+  print(string.format("rejected training lines: %d", st.rejected))
+  for _, r in ipairs(m.rejected) do print("  REJECTED (" .. r.why .. "): " .. r.line) end
+  local numerals = 0
+  for w in pairs(m.vocab) do if markov.has_free_number(w) then numerals = numerals + 1 end end
+  print(string.format("numerals in vocabulary: %d  (must be 0: every quantity comes from a verified slot)", numerals))
+  local topic = arg[2]
+  if topic then
+    local rng = RNG.new(gen.seed(0, 0))
+    print("\nsamples for [" .. topic .. "] (slots unfilled, since there is no run to fill them from):")
+    for i = 1, 6 do
+      local s = m:generate("[" .. topic .. "]", rng, { temperature = 0.9 })
+      print("  " .. (s or "(no such topic)"))
+    end
+  else
+    io.write("topics: ")
+    for _, t in ipairs(m:topics()) do io.write(t, " ") end
+    print("\n\npass a topic to sample it, e.g. lua run.lua lm standing")
   end
 elseif cmd == "history" then
   local cfg = require("rsi.config")
@@ -87,8 +122,10 @@ elseif cmd == "selftest" then
   local genome = require("rsi.kernel.genome")
   local evaluate = require("rsi.kernel.evaluate")
   local json = require("rsi.kernel.json")
-  local dir = "/tmp/cell4-selftest"
-  os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "/data/arc'")
+  -- Kept inside the project rather than /tmp so the path exists on every platform.
+  local dir = cfg.root .. "/state/.selftest"
+  plat.rmrf(dir)
+  plat.mkdirp(dir .. "/data/arc")
   local samples = { { { 1, 0, 2 }, { 0, 1, 0 }, { 2, 0, 1 } }, { { 0, 1, 1 }, { 1, 0, 0 }, { 0, 0, 1 } },
                     { { 2, 2, 0 }, { 0, 1, 0 }, { 1, 0, 2 } }, { { 1, 1, 0 }, { 0, 2, 1 }, { 0, 0, 0 } } }
   local function flip(g) local o = {} for r = 1, #g do local row = {} for c = 1, #g[r] do row[c] = g[r][#g[r] + 1 - c] end o[r] = row end return o end
@@ -103,7 +140,7 @@ elseif cmd == "selftest" then
   local ext = benchmarks.load_external(dir, 10)
   local g = genome.load(cfg.root .. "/genome")
   local r = evaluate.run(g, ext, { nodes = cfg.external_nodes, seconds = cfg.external_seconds })
-  os.execute("rm -rf '" .. dir .. "'")
+  plat.rmrf(dir)
 
   -- The narrator's accuracy guard, checked rather than asserted. A summary field is deliberately
   -- corrupted; the narrator must catch it by recomputing from the per-task vector, correct it, and
@@ -133,11 +170,47 @@ elseif cmd == "selftest" then
     and "caught a corrupted fact, recomputed it to 37, kept the false 9999 out of the text"
     or "FAILED to catch the corrupted fact"))
 
-  if #ext == 2 and r.solved == 2 and caught and corrected then
-    print("selftest OK: ARC-format loading, solving, held-out verification and the narrator's accuracy guard all work")
+  -- The language model's one safety property, checked rather than claimed: its vocabulary must
+  -- contain no numerals, and a sentence whose numbers do not match the facts must never be returned.
+  local markov = require("rsi.lm.markov")
+  local lmgen = require("rsi.lm.generate")
+  local lm_ok, lm_why = false, "no corpus"
+  local model = lmgen.load()
+  if model then
+    local numerals = 0
+    for w in pairs(model.vocab) do if markov.has_free_number(w) then numerals = numerals + 1 end end
+    -- Facts deliberately missing {nodes}: any sentence needing it must be refused, not filled with
+    -- a leftover or a guess.
+    local facts = { gen = 1, heldout_solved = 7, heldout_n = 10, heldout_pct = 70.0, candidates = 2,
+      corpus = 5, library = 0, accepted_total = 0, candidates_total = 2, accepted = 0 }
+    local RNG = require("rsi.kernel.rng")
+    local leaked = nil
+    for trial = 1, 60 do
+      local sent = lmgen.sentence(model, "standing", facts, RNG.new("selftest:" .. trial))
+      if sent then
+        for num in sent:gmatch("%d+%.?%d*") do
+          local found = false
+          for _, v in pairs(facts) do
+            if type(v) == "number" and (string.format("%d", math.floor(v)) == num
+              or string.format("%.1f", v) == num) then found = true end
+          end
+          if not found then leaked = leaked or (num .. " in: " .. sent) end
+        end
+      end
+    end
+    lm_ok = (numerals == 0) and (leaked == nil) and (model.lines > 0)
+    lm_why = string.format("%d training lines, %d numerals in vocabulary, ungrounded number: %s",
+      model.lines, numerals, leaked or "none in 60 samples")
+  end
+  print(string.format("  %-22s %s", "language model", lm_ok
+    and ("no numeral can reach the prose (" .. lm_why .. ")")
+    or ("FAILED: " .. lm_why)))
+
+  if #ext == 2 and r.solved == 2 and caught and corrected and lm_ok then
+    print("selftest OK: ARC-format loading, solving, held-out verification, the narrator's accuracy guard and the LM's numeral guard all work")
   else
-    print(string.format("selftest FAILED: loaded %d/2 tasks, solved %d/%d, narrator guard %s",
-      #ext, r.solved, r.n, (caught and corrected) and "ok" or "BROKEN"))
+    print(string.format("selftest FAILED: loaded %d/2 tasks, solved %d/%d, narrator guard %s, LM guard %s",
+      #ext, r.solved, r.n, (caught and corrected) and "ok" or "BROKEN", lm_ok and "ok" or "BROKEN"))
     os.exit(1)
   end
 else

@@ -16,12 +16,16 @@ local features = require("rsi.kernel.features")
 local challenge = require("rsi.kernel.challenge")
 local journal = require("rsi.kernel.journal")
 local narrator = require("rsi.kernel.narrator")
+local lm = require("rsi.lm.generate")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 local ROOT = cfg.root
 
 local function ensure_dirs()
-  os.execute(string.format("mkdir -p '%s/state' '%s/www' '%s/versions' '%s/data/arc' '%s/data/research'", ROOT, ROOT, ROOT, ROOT, ROOT))
+  for _, d in ipairs({ "/state", "/www", "/versions", "/data/arc", "/data/research" }) do
+    plat.mkdirp(ROOT .. d)
+  end
 end
 
 local function load_state()
@@ -133,8 +137,7 @@ end
 
 local function write_dashboard(state, bench, champ_g, champ_r, external)
   local arc_on_disk = 0
-  local p = io.popen("ls '" .. ROOT .. "/data/arc' 2>/dev/null | wc -l")
-  if p then arc_on_disk = tonumber(p:read("*a")) or 0 p:close() end
+  arc_on_disk = #plat.ls(ROOT .. "/data/arc")
   local variants = {}
   for name in pairs(bench.variants or {}) do variants[#variants + 1] = name end
   table.sort(variants)
@@ -164,11 +167,11 @@ local function log(state, msg)
 end
 
 -- Single-writer lock. Two loops sharing rsi/state interleave their writes and silently corrupt the
--- lineage; mkdir is atomic on every POSIX filesystem, so it is the lock. A stale lock (killed
--- process) is broken after 30 minutes.
+-- lineage; creating a directory is atomic and fails when it exists, on POSIX filesystems and on
+-- Windows alike, so it is the lock. A stale lock (killed process) is broken after 30 minutes.
 local LOCK = ROOT .. "/state/.lock"
 local function acquire_lock()
-  if os.execute("mkdir '" .. LOCK .. "' 2>/dev/null") then return true end
+  if plat.mkdir_exclusive(LOCK) then return true end
   local f = io.open(LOCK .. "/pid", "r")
   local age = nil
   if f then
@@ -177,8 +180,8 @@ local function acquire_lock()
     if t then age = os.time() - t end
   end
   if age and age > 1800 then
-    os.execute("rm -rf '" .. LOCK .. "'")
-    return os.execute("mkdir '" .. LOCK .. "' 2>/dev/null") and true or false
+    plat.rmrf(LOCK)
+    return plat.mkdir_exclusive(LOCK)
   end
   return false
 end
@@ -188,7 +191,7 @@ local function write_lock_stamp()
   if f then f:write(tostring(os.time())) f:close() end
 end
 
-local function release_lock() os.execute("rm -rf '" .. LOCK .. "'") end
+local function release_lock() plat.rmrf(LOCK) end
 
 function M.step(opts)
   opts = opts or {}
@@ -346,7 +349,7 @@ function M.run_generation(opts)
     }
     -- bookkeeping must never take down a generation: the verdict is already decided
     pcall(function()
-      os.execute("mkdir -p '" .. dir .. "'")
+      plat.mkdirp(dir)
       json.write(dir .. "/evidence.json", { entry = entry, heldout = cand_r.heldout,
         adversarial = cand_r.adversarial, train = cand_r.train })
     end)
@@ -408,7 +411,7 @@ function M.run_generation(opts)
   -- The narration. Written every generation with no typing delay so the loop is not slowed by it;
   -- `lua run.lua narrate` replays the latest entry a word at a time.
   do
-    local ok_n, res = pcall(narrator.narrate, {
+    local record = {
       gen = gen, fingerprint = genome.fingerprint(champ_g),
       heldout = champ_r.heldout, adversarial = champ_r.adversarial,
       regression = champ_r.regression, external = champ_r.external,
@@ -416,8 +419,14 @@ function M.run_generation(opts)
       corpus_size = journal.corpus_size(ROOT), library_size = #champ_g.lib,
       challenge = ranking, saturated = saturated,
       accepted_total = state.accepted_total, candidates_total = state.candidates_total,
-    }, { quiet = true, seed = "narrate:" .. gen })
-    if ok_n then
+    }
+    -- The Markov LM writes it when a corpus is present; the template narrator is the fallback, so a
+    -- missing or unusable corpus degrades the prose rather than losing the entry.
+    local ok_n, res = pcall(lm.narrate, record, { seed = lm.seed(gen, 0) })
+    if not ok_n or not res then
+      ok_n, res = pcall(narrator.narrate, record, { quiet = true, seed = "narrate:" .. gen })
+    end
+    if ok_n and res then
       pcall(narrator.record, ROOT, res)
       pcall(narrator.render_history, ROOT)
       if res.corrections and #res.corrections > 0 then

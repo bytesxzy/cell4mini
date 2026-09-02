@@ -1,6 +1,7 @@
 -- Versioned lineage: every candidate is snapshotted with its evidence and the accept/reject verdict.
 local json = require("rsi.kernel.json")
 local genome = require("rsi.kernel.genome")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 function M.record(root, entry)
@@ -23,13 +24,11 @@ function M.prune(root, current_gen, keep)
   keep = keep or 50
   local cutoff = current_gen - keep
   if cutoff < 1 then return 0 end
-  local p = io.popen("ls -1 '" .. root .. "/versions' 2>/dev/null")
-  if not p then return 0 end
   local removed = 0
-  for name in p:lines() do
+  for _, name in ipairs(plat.ls(root .. "/versions")) do
     local g = tonumber(name:match("^g(%d+)_"))
     if g and g <= cutoff and not name:match("_champion$") then
-      os.execute("rm -rf '" .. root .. "/versions/" .. name .. "'")
+      plat.rmrf(root .. "/versions/" .. name)
       removed = removed + 1
     end
   end

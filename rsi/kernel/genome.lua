@@ -3,6 +3,7 @@
 local ops = require("rsi.kernel.ops")
 local program = require("rsi.kernel.program")
 local serialize = require("rsi.kernel.serialize")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 local function loadfile_strict(path)
@@ -44,7 +45,7 @@ function M.load(dir)
 end
 
 function M.save(g, dir)
-  os.execute("mkdir -p '" .. dir .. "'")
+  plat.mkdirp(dir)
   serialize.write(dir .. "/dsl_base.lua", g.base, "visible primitive selection (mutable)")
   serialize.write(dir .. "/library.lua", g.lib, "learned abstractions (mutable, grown by library learning)")
   serialize.write(dir .. "/policy.lua", g.policy, "search policy: costs, constants, budgets, strategy (mutable)")

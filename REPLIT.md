@@ -12,12 +12,24 @@ lua run.lua step       # exactly one generation
 lua run.lua status     # what has happened so far
 lua run.lua narrate    # replay the last generation's account, a word at a time
 lua run.lua history    # print the whole narrated history
+lua run.lua lm         # LM statistics, and the check that its vocabulary contains no numerals
+lua run.lua lm standing  # sample sentences on one topic
 ```
 
-`narrate` is the one to watch. It is a procedural generator over audited measurements, **not a
-language model** — it cannot say anything that is not a real number in the run — and it corrects
-itself in the open if a fact fails recomputation. `selftest` deliberately corrupts a field to prove
+`narrate` is the one to watch. The wording comes from `rsi/lm/markov.lua`, a real n-gram Markov
+**language model** trained by counting on `rsi/lm/corpus.txt` — the pre-neural kind: no network, no
+gradient, no external service, nothing that would count as cheating on ARC. What it is *not* allowed
+to do is produce a number: its vocabulary contains no digits at all, every quantity arrives through a
+slot filled from audited measurements after the sentence is sampled, and a sentence whose numerals do
+not match the facts is discarded and re-drawn. When nothing passes, the deterministic template
+generator in `rsi/kernel/narrator.lua` writes that sentence instead and the output labels it
+`[template]`. The facts themselves are recomputed from the raw results first, and a correction is
+printed in the open rather than quietly applied. `selftest` deliberately corrupts a field to prove
 that guard is real.
+
+The shipped corpus is a seed of ~130 lines, which is small enough that the chain sometimes splices
+two training lines into an awkward sentence. `DATASET_PROMPT.md` is a ready-made prompt to generate
+400–1000 more; appending them changes fluency only, never accuracy.
 
 `eval` is the quickest way to see the engine working. Expect roughly:
 
@@ -40,17 +52,22 @@ split is large rather than the acceptance threshold loose.
 | `rsi/data/corpus.jsonl` | the training data — every task it has ever solved, with the program it found and the one the generator used |
 | `rsi/data/journal.jsonl` | the same milestones, machine-readable |
 | `rsi/state/lineage.jsonl` | every candidate ever tried and exactly why it was refused |
+| `rsi/lm/corpus.txt` | the LM's training data — one tagged sentence per line, no digits allowed |
+| `rsi/data/narrative.jsonl` | every narration with its seed, per-sentence provenance and corrections |
 | `HISTORY.md` | the system's own account in English, newest first — try `lua run.lua narrate` to watch it typed out |
 
 ## Watching the console
 
-The dashboard is a static page that polls three files the loop writes. In a second shell:
+Two static pages poll the JSON the loop writes beside them: `plain.html` (undesigned on purpose —
+every number in plain tables, plus what the LM wrote) and `index.html` (the styled console). In a
+second shell:
 
 ```
 cd rsi/www && python3 -m http.server 8080
 ```
 
-Then open the webview. It shows the champion's held-out rate with a confidence interval, live
+Then open the webview — `plain.html` for everything at once, `index.html` for the arranged version.
+It shows the champion's held-out rate with a confidence interval, live
 per-task progress, and the full lineage with both p-values for every candidate and why it was
 rejected.
 

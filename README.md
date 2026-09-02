@@ -158,17 +158,47 @@ here to read anything — and the console says so in those words. The registry's
 second field: without a record of what was tried and failed, the system would happily re-propose the
 same losing ideas and a reader would have no way to tell an untried idea from a tried one.
 
-## The narrator
+## The language model, and the narrator behind it
 
-`rsi/kernel/narrator.lua` writes the system's account of itself in English, appended to
-`rsi/data/narrative.jsonl` and rendered to `HISTORY.md`. `lua run.lua narrate` replays the latest
-entry a word at a time.
+Two components write the system's account of itself, and it matters which does what.
 
-**It is not a language model, and the code says so in those words.** There is no network, no training
-on text, no external call, and it cannot state anything that is not already a measured number in this
-system. It is a procedural generator: the phrasing is chosen from equivalent forms by a seeded RNG,
-and the content is pinned to audited facts. Calling it an LM would be the same overclaim this project
-has refused everywhere else.
+**`rsi/lm/markov.lua` is a language model.** It is an n-gram Markov model: it estimates
+P(w_t | w_{t-1} … w_{t-n+1}) by counting on `rsi/lm/corpus.txt` and generates by sampling that
+distribution with Katz-style backoff and a temperature. That is a language model in the textbook
+sense — the pre-neural kind. No network, no gradient, no external service, nothing that would be
+cheating on ARC. It is not a transformer and nothing here pretends otherwise.
+
+Counts are kept **per topic**. With a single shared model, backing off to a two-word context lets the
+chain leave one topic's phrasing for another's mid-sentence; scoping the counts to the topic means
+backoff can shorten the context but never change the subject the reasoning state chose. Sampling is
+seeded from `os.time()` mixed with `os.clock()` and the generation number, and the seed is recorded
+in `narrative.jsonl`, so wording varies between runs and any narration reproduces exactly.
+
+**The chain is never allowed to produce a number.** A Markov model has no notion of truth and will
+emit a fluent falsehood without hesitating, so the guarantee is structural rather than statistical:
+
+* Its vocabulary contains **no numerals at all**. A training line containing a bare digit is refused
+  at load time, and a sampled token carrying a digit outside a slot is refused at every backoff level.
+  `lua run.lua lm` prints the count, which must be zero.
+* Every quantity arrives through a `{slot}` filled from audited facts *after* sampling.
+* After filling, every numeral in the finished sentence is checked against the facts. One that is not
+  there means the sentence is discarded and re-drawn.
+* Sparse counts also splice — the tail of one training line rejoined to the middle of another. Those
+  are caught structurally (too short, a content word three times over, a repeated bigram, a dangling
+  function word at the end) and re-drawn too.
+* If nothing survives, `rsi/kernel/narrator.lua` — the deterministic template generator, which is
+  *not* a language model — writes that sentence instead, and the output labels it `[template]`. The
+  fallback rate is reported, not hidden.
+
+So the chain controls wording and word order and nothing else. `rsi/lm/corpus.txt` ships as a seed of
+~130 lines, which is enough to work but small enough that a sentence occasionally reads awkwardly;
+`DATASET_PROMPT.md` is a ready-made prompt to generate 400–1000 more. Growing the corpus changes
+fluency only — the accuracy guarantee comes from the slot mechanism, not from the data.
+
+`lua run.lua narrate` replays the latest entry a word at a time; `lua run.lua lm [topic]` shows the
+model's statistics and samples it directly.
+
+### The audit underneath both
 
 What makes it trustworthy is not care, it is a mechanism. Every sentence declares which facts it
 uses. Those facts are gathered once from the run's results and then **independently recomputed from
@@ -179,7 +209,7 @@ confident falsehood. That is what "writes and corrects itself" means here — a 
 with a visible outcome, not a typing animation.
 
 You can verify the guard yourself rather than taking my word for it: `lua run.lua selftest` corrupts a
-summary field to `9999`, and the narrator has to catch it from the per-task vector, recompute it to
+summary field to `9999`, and the narration has to catch it from the per-task vector, recompute it to
 the true value, and keep the false number out of the text it asserts. The selftest fails loudly if it
 does not.
 
@@ -244,9 +274,11 @@ same budget, which changes which programs get solved, which changes the next rou
 
 ## Honest limits
 
-* **No language model = no reading papers.** The research fetcher cannot turn an abstract into a
-  mechanism. Hypotheses come from the system's own experiments. This is fundamental to the LLM-free
-  design you asked for, not an engineering shortcut.
+* **The language model does not read, and does not reason.** `rsi/lm/` writes prose about measurements
+  that were already made. It plays no part in the search, in hypothesis generation, or in the
+  acceptance decision, and an n-gram model could not: it has no semantics. The research fetcher
+  therefore still cannot turn an abstract into a mechanism — hypotheses come from the system's own
+  experiments. This is fundamental to the LLM-free design you asked for, not an engineering shortcut.
 * **The search code is mutable but not self-rewritten.** Automated operators change the library, priors,
   constants, visible DSL, hyperparameters and strategy flags. Source-level rewrites of `search.lua` are
   something a human or a future operator can do; the kernel will evaluate them the same way.
@@ -323,17 +355,29 @@ lua run.lua loop 20     # forever
 lua run.lua status      # state summary
 lua run.lua eval        # evaluate the champion on fresh splits (no mutation)
 lua run.lua research    # force a research fetch
+lua run.lua narrate     # replay the latest generation's account, a word at a time
+lua run.lua history     # the whole narrated history
+lua run.lua lm [topic]  # LM statistics, or sample sentences on one topic
 lua run.lua selftest    # verify the external ARC benchmark path end to end
 lua main.lua            # the CELL2 way: transpiles CELL2 -> source/execute.lua and runs the loop
 ```
 
-`selftest` writes two ARC-format tasks to a temp directory, loads them through the same code path the
+`selftest` checks three things. It writes two ARC-format tasks to a scratch directory, loads them through the same code path the
 real fetcher feeds, solves them and verifies on their held-out test example. Run it after deploying:
 it confirms the external benchmark works before any real ARC data has been fetched. It never writes
-to `rsi/data/arc`, so the real benchmark cannot be polluted with synthetic tasks.
+to `rsi/data/arc`, so the real benchmark cannot be polluted with synthetic tasks. It then corrupts a
+summary field and requires the narration to catch it, and finally samples the LM sixty times against
+deliberately incomplete facts and requires that no numeral the facts do not contain ever reaches the
+prose. Any of the three failing exits non-zero.
 
-Console: open `rsi/www/index.html` from a web server (it polls `state.json`, `progress.json`,
-`lineage.jsonl`).
+Console: serve `rsi/www/` from any web server. `plain.html` is undesigned on purpose — every number
+the system knows, in plain tables, plus what the LM wrote. `index.html` is the styled version. Both
+poll `state.json`, `progress.json`, `lineage.jsonl` and `narrative.jsonl` beside them; opening either
+over `file://` will not work, because browsers block those fetches.
+
+**`INSTALL.md` is the full guide** — installing Lua on Windows, macOS or Linux (including without
+root), unzipping into a web directory, the handful of settings worth changing, keeping it running
+under systemd or Task Scheduler, and restricting what is publicly reachable.
 
 ## Deploy on your web server
 
@@ -351,7 +395,9 @@ of `.htaccess`. Logs: `journalctl -u cell4-rsi -f`. Runtime state lives in `rsi/
 Research cadence and every budget/threshold live in `rsi/config.lua`.
 
 Only one generation may run at a time. `rsi/state/.lock` is taken with an atomic `mkdir` and released
-at the end of the generation; a second process refuses to start rather than interleave writes into
+at the end of the generation (on Windows, the cmd.exe equivalent — `rsi/kernel/plat.lua` holds every
+OS call the loop makes, so the loop runs natively there as well as under POSIX); a second process
+refuses to start rather than interleave writes into
 the same lineage. A lock left behind by a killed process is broken after 30 minutes. This was not
 hypothetical during development: three loops ran against one state directory and produced an
 acceptance that no single run reproduced.

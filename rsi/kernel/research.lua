@@ -7,10 +7,14 @@
 -- Hypotheses that drive experiments come from the system's own experimental data (see mutate.lua).
 local json = require("rsi.kernel.json")
 local mechanisms = require("rsi.kernel.mechanisms")
+local plat = require("rsi.kernel.plat")
 local M = {}
 
 local function fetch(url)
-  local cmd = "curl -sL --max-time 45 -A 'cell4-rsi/1.0' '" .. url:gsub("'", "%%27") .. "' 2>/dev/null"
+  -- Quoting and the null device differ between sh and cmd.exe; plat.quote picks the right one.
+  local safe = url:gsub("'", "%%27"):gsub('"', "%%22")
+  local cmd = "curl -sL --max-time 45 -A " .. plat.quote("cell4-rsi/1.0") .. " " ..
+    plat.quote(safe) .. (plat.windows and " 2>nul" or " 2>/dev/null")
   local p = io.popen(cmd)
   if not p then return nil end
   local body = p:read("*a")
@@ -69,10 +73,9 @@ local ARC_SOURCES = {
 
 local function fetch_arc(root, cfg, log)
   local dir = root .. "/data/arc"
-  os.execute("mkdir -p '" .. dir .. "'")
+  plat.mkdirp(dir)
   local have = {}
-  local p = io.popen("ls '" .. dir .. "' 2>/dev/null")
-  if p then for name in p:lines() do have[name] = true end p:close() end
+  for _, name in ipairs(plat.ls(dir)) do have[name] = true end
   local fetched = 0
   for _, src in ipairs(ARC_SOURCES) do
     if fetched >= cfg.arc_per_fetch then break end
@@ -102,7 +105,7 @@ function M.due(state, cfg)
 end
 
 function M.run(root, cfg, state)
-  os.execute("mkdir -p '" .. root .. "/data/research'")
+  plat.mkdirp(root .. "/data/research")
   local logs = {}
   local function log(m) logs[#logs + 1] = m end
   local papers, signals = fetch_arxiv(root, cfg, log)

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>CELL4 plain view</title>
+<meta name="robots" content="noindex,nofollow">
+<!-- Deliberately unstyled. Everything the system knows, in plain HTML, in reading order.
+     For the styled console see index.html in this same directory. -->
+</head><body>
+<h1>CELL4 &mdash; plain view</h1>
+<p id="hdr">loading&hellip;</p>
+
+<h2>Where it stands</h2>
+<table border="1" cellpadding="4" id="standing"></table>
+
+<h2>What the language model wrote</h2>
+<p>Written by the n-gram Markov language model in <code>rsi/lm/</code>, trained on
+<code>rsi/lm/corpus.txt</code>. The chain chooses the wording; every number comes from a verified
+slot, never from the chain. Sentences marked <b>template</b> are ones where no sampled candidate
+passed verification, so the deterministic fallback was used instead.</p>
+<div id="lm"></div>
+
+<h2>What is worth being challenged by</h2>
+<table border="1" cellpadding="4" id="challenge"></table>
+<p id="saturated"></p>
+
+<h2>Every candidate tried (newest first)</h2>
+<table border="1" cellpadding="4" id="lineage"></table>
+
+<h2>Benchmarks</h2>
+<table border="1" cellpadding="4" id="bench"></table>
+
+<h2>Learned library</h2>
+<div id="lib"></div>
+
+<h2>Research feed</h2>
+<div id="research"></div>
+
+<hr>
+<p><small>This page polls state.json, progress.json, lineage.jsonl and narrative.jsonl every five
+seconds. If it says the files are unavailable, the loop has not run a generation yet, or the files
+are not being served from this directory.</small></p>
+
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+function pct(x) { return (100 * x).toFixed(1) + '%'; }
+function rows(pairs) {
+  var h = '';
+  for (var i = 0; i < pairs.length; i += 2) h += '<tr><td>' + esc(pairs[i]) + '</td><td>' + esc(pairs[i + 1]) + '</td></tr>';
+  return h;
+}
+async function get(path, asText) {
+  var r = await fetch(path + '?' + Date.now());
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  return asText ? r.text() : r.json();
+}
+async function load() {
+  var s, p = {}, lines = [], narr = [];
+  try { s = await get('state.json'); }
+  catch (e) { $('hdr').innerHTML = '<b>state.json unavailable:</b> ' + esc(e.message); return; }
+  try { p = await get('progress.json'); } catch (e) {}
+  try {
+    var t = await get('lineage.jsonl', true);
+    lines = t.trim().split('\n').filter(Boolean).map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) {}
+  try {
+    var t2 = await get('narrative.jsonl', true);
+    narr = t2.trim().split('\n').filter(Boolean).map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) {}
+
+  var c = s.champion;
+  $('hdr').innerHTML = 'generation <b>' + s.gen + '</b>, champion <code>' + esc(c.fingerprint) +
+    '</code>, state written ' + Math.round(Date.now() / 1000 - s.time) + 's ago. Currently: ' +
+    esc(p.phase || 'idle') + (p.total ? (' (' + p.done + '/' + p.total + ' tasks, ' + p.solved + ' solved)') : '');
+
+  $('standing').innerHTML = rows([
+    'held-out solve rate', pct(c.heldout.rate) + '  (' + c.heldout.solved + ' of ' + c.heldout.n + ')',
+    '95% confidence interval', pct(c.heldout.lo) + ' to ' + pct(c.heldout.hi),
+    'partial credit', pct(c.heldout.partial),
+    'adversarial split', c.adversarial.solved + ' of ' + c.adversarial.n,
+    'regression suite', c.regression.solved + ' of ' + c.regression.n,
+    'external ARC', c.external.n ? (c.external.solved + ' of ' + c.external.n) : 'none fetched yet',
+    'mean search nodes per task', c.heldout.nodes.toFixed(0),
+    'learned abstractions', c.library_size,
+    'visible operators', c.ops,
+    'solved-program corpus', s.corpus_size || 0,
+    'accepted so far', s.accepted_total + ' of ' + s.candidates_total + ' candidates'
+  ]);
+
+  var last = narr[narr.length - 1];
+  if (last) {
+    var h = '<p><i>generation ' + last.gen + ', ' +
+      (last.generator === 'markov'
+        ? ('n-gram Markov LM, seed <code>' + esc(String(last.seed)) + '</code>, ' + last.from_chain + ' sentences from the chain and ' + last.from_template + ' from the template fallback')
+        : 'template narrator (no LM corpus available)') + '</i></p>';
+    for (var i = 0; i < last.sentences.length; i++) {
+      var src = last.provenance ? last.provenance[i] : 'template';
+      h += '<p>' + esc(last.sentences[i]) + ' <small>[' + esc(src) + ']</small></p>';
+    }
+    if (last.corrections && last.corrections.length) {
+      h += '<p><b>Corrected while writing:</b></p><ul>';
+      for (var j = 0; j < last.corrections.length; j++) {
+        var cc = last.corrections[j];
+        h += '<li><code>' + esc(cc.key) + '</code> was stated as ' + esc(String(cc.stated)) + ' and recomputed to ' + esc(String(cc.actual)) + '</li>';
+      }
+      h += '</ul>';
+    }
+    $('lm').innerHTML = h;
+  } else {
+    $('lm').innerHTML = '<p>nothing narrated yet &mdash; run <code>lua run.lua step</code></p>';
+  }
+
+  var ch = '<tr><th>family</th><th>n</th><th>solved</th><th>information</th><th>discrimination</th><th>headroom</th><th>score</th></tr>';
+  (s.challenge || []).forEach(function (r) {
+    ch += '<tr><td>' + esc(r.family) + '</td><td>' + r.n + '</td><td>' + pct(r.solve_rate) + '</td><td>' +
+      r.information.toFixed(2) + '</td><td>' + r.discrimination.toFixed(2) + '</td><td>' +
+      r.headroom.toFixed(2) + '</td><td>' + r.score.toFixed(3) + '</td></tr>';
+  });
+  $('challenge').innerHTML = ch;
+  $('saturated').textContent = (s.saturated && s.saturated.length)
+    ? ('Saturated, harder variants spawned from: ' + s.saturated.join(', '))
+    : 'Nothing saturated: every family still separates candidates.';
+
+  var lg = '<tr><th>gen</th><th>operator</th><th>change</th><th>held-out delta</th><th>bootstrap p</th><th>verdict</th></tr>';
+  lines.slice().reverse().slice(0, 60).forEach(function (l) {
+    lg += '<tr><td>' + l.gen + '</td><td>' + esc(l.operator) + '</td><td>' + esc(l.change) + '</td><td>' +
+      (l.heldout_delta >= 0 ? '+' : '') + (100 * l.heldout_delta).toFixed(1) + 'pp</td><td>' +
+      (l.p_value != null ? l.p_value.toFixed(3) : '') + '</td><td>' +
+      (l.accepted ? 'ACCEPTED' : 'rejected') + ': ' + esc(l.reason) + '</td></tr>';
+  });
+  $('lineage').innerHTML = lg;
+
+  var b = s.bench;
+  $('bench').innerHTML = rows([
+    'held-out epoch', b.epoch,
+    'active families', b.families.join(', '),
+    'variants spawned', b.variants.length ? b.variants.join(', ') : 'none',
+    'burned', b.burned.length ? b.burned.join(', ') : 'none',
+    'rotations', b.rotations,
+    'regression tasks', b.regression_size,
+    'ARC files on disk', b.arc_on_disk
+  ]);
+
+  $('lib').innerHTML = (c.library || []).length
+    ? '<ul>' + c.library.map(function (e) {
+        return '<li><code>' + esc(e.name) + '</code> = <code>' + esc(e.expr) + '</code> (' +
+          esc(e.arg) + (e.arg2 ? ',' + esc(e.arg2) : '') + ' to ' + esc(e.ret) + ', from ' + esc(e.origin || '?') + ')</li>';
+      }).join('') + '</ul>'
+    : '<p>empty &mdash; nothing learned yet</p>';
+
+  $('research').innerHTML = (s.research.papers || []).length
+    ? '<ul>' + s.research.papers.map(function (r) {
+        return '<li>' + esc((r.published || '').slice(0, 10)) + ' &mdash; ' + esc(r.title) +
+          (r.addresses_gap && r.addresses_gap.length ? ' <b>[gap: ' + esc(r.addresses_gap.join(', ')) + ']</b>' : '') + '</li>';
+      }).join('') + '</ul>'
+    : '<p>no papers fetched yet (needs outbound HTTPS)</p>';
+}
+load();
+setInterval(load, 5000);
+</script>
+</body></html>

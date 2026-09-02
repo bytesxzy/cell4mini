@@ -1,0 +1,160 @@
+# CELL4 language-model training corpus.
+#
+# FORMAT: one sentence per line, beginning with a [topic] tag.
+# HARD RULE: no line may contain a bare number. Every quantity is a {slot}, filled after sampling
+# from audited facts. A line containing a digit outside a slot is REJECTED at load time -- run
+# `lua run.lua lm` to see rejections. This is what stops a Markov chain inventing a statistic.
+#
+# Slots available:
+#   {gen} {heldout_solved} {heldout_n} {heldout_pct} {adv_solved} {adv_n} {regr_n} {nodes}
+#   {candidates} {best_operator} {best_delta_pp} {rejects_screened} {rejects_regression}
+#   {top_challenge} {top_challenge_pct} {saturated} {corpus} {library} {accepted_total}
+#   {candidates_total}
+#
+# This file is a SEED. To grow it, use DATASET_PROMPT.md with Grok (or any model) and append the
+# result. More lines means more varied prose; the accuracy guarantee does not change, because it
+# comes from the slot mechanism rather than from the data.
+
+[standing] generation {gen} closed with {heldout_solved} of {heldout_n} held-out tasks solved , {heldout_pct} in all .
+[standing] at the end of generation {gen} I stood at {heldout_pct} on the secret split .
+[standing] generation {gen} left me holding {heldout_solved} of {heldout_n} , which is {heldout_pct} .
+[standing] this was generation {gen} , and I finished it at {heldout_pct} .
+[standing] by the close of generation {gen} the count was {heldout_solved} solved out of {heldout_n} .
+[standing] generation {gen} : {heldout_solved} tasks fell , {heldout_n} were set , {heldout_pct} overall .
+[standing] I ended generation {gen} on {heldout_pct} of the held-out set .
+[standing] the tally for generation {gen} came to {heldout_solved} of {heldout_n} .
+[standing] after generation {gen} I could solve {heldout_pct} of what was hidden from me .
+[standing] generation {gen} finished with {heldout_solved} solved and {heldout_pct} to show for it .
+[standing] the secret split gave up {heldout_solved} of {heldout_n} in generation {gen} .
+[standing] I closed generation {gen} at {heldout_pct} , no better and no worse than the tests allow .
+[standing] generation {gen} ended where it began unless the evidence said otherwise , at {heldout_pct} .
+[standing] my standing after generation {gen} is {heldout_solved} of {heldout_n} .
+
+[supporting] the adversarial split gave {adv_solved} of {adv_n} , and a task cost me {nodes} search nodes on average .
+[supporting] adversarially I managed {adv_solved} of {adv_n} ; the mean task took {nodes} nodes .
+[supporting] against the harder split I took {adv_solved} of {adv_n} , at {nodes} nodes a task .
+[supporting] the regression suite held {regr_n} tasks behind me and I lost none of them .
+[supporting] {regr_n} regression tasks stood as a floor , and the adversarial split gave {adv_solved} of {adv_n} .
+[supporting] I spent {nodes} nodes on the average task and took {adv_solved} of {adv_n} adversarially .
+[supporting] the fresh adversarial tasks yielded {adv_solved} of {adv_n} .
+[supporting] search cost me {nodes} nodes a task , which is the currency I actually pay in .
+[supporting] behind me sat {regr_n} regression tasks that no future champion may drop .
+[supporting] the harder split conceded {adv_solved} of {adv_n} , and nothing in the regression suite moved .
+[supporting] {nodes} nodes to the task , {adv_solved} of {adv_n} adversarially , {regr_n} held in reserve .
+[supporting] my search budget went {nodes} nodes deep on average this time .
+
+[verdict_none] I tried {candidates} candidates and kept none of them .
+[verdict_none] none of the {candidates} candidates survived the rule .
+[verdict_none] {candidates} candidates came and went , and the champion did not move .
+[verdict_none] the closest was {best_operator} at {best_delta_pp} points , which the tests would not call real .
+[verdict_none] {best_operator} gained {best_delta_pp} points and still failed to convince either test .
+[verdict_none] nothing was accepted ; {best_operator} came nearest with {best_delta_pp} points .
+[verdict_none] I proposed {candidates} changes to myself and refused every one .
+[verdict_none] the best of the {candidates} was {best_operator} , and it was still inside the noise .
+[verdict_none] no candidate cleared the bar , so I remain what I was .
+[verdict_none] {candidates} attempts , no acceptances , which is the harness working rather than failing .
+[verdict_none] I could not justify keeping any of the {candidates} candidates on the evidence .
+[verdict_none] {best_operator} was the strongest showing at {best_delta_pp} points and it was not enough .
+
+[verdict_accept] NEW CHAMPION : {best_operator} gained {best_delta_pp} points and cleared both tests .
+[verdict_accept] I have a NEW CHAMPION ; {best_operator} was worth {best_delta_pp} points .
+[verdict_accept] {best_operator} passed the bootstrap and the sign test alike , so I kept it .
+[verdict_accept] the change from {best_operator} held up under both tests and became my NEW CHAMPION .
+[verdict_accept] {best_operator} earned its place with {best_delta_pp} points of held-out gain .
+[verdict_accept] I accepted {best_operator} , the first thing in a while to survive the rule .
+[verdict_accept] {best_delta_pp} points from {best_operator} , significant twice over , so it stands .
+
+[screening] {rejects_screened} of them solved strictly fewer held-out tasks and were screened out early .
+[screening] {rejects_screened} were dropped on the held-out screen before the other splits were run .
+[screening] the screen caught {rejects_screened} candidates that could not have passed anyway .
+[screening] {rejects_screened} candidates lost ground immediately and were not worth evaluating further .
+[screening] I stopped evaluating {rejects_screened} of them as soon as the held-out count fell .
+[screening] screening saved the cost of four more splits on {rejects_screened} candidates .
+
+[regression_loss] {rejects_regression} candidates LOST GROUND on the regression suite .
+[regression_loss] {rejects_regression} of them broke something an earlier champion could already do .
+[regression_loss] the regression suite refused {rejects_regression} candidates outright .
+[regression_loss] {rejects_regression} changes would have cost me ground I had already taken .
+[regression_loss] I will not trade an old solve for a new one , so {rejects_regression} were refused .
+
+[challenge] the family with most left to teach me is {top_challenge} , which I solve {top_challenge_pct} of the time .
+[challenge] {top_challenge} is where I still learn the most at {top_challenge_pct} solved .
+[challenge] {top_challenge} sits near the middle at {top_challenge_pct} , which is where a benchmark is most informative .
+[challenge] I get {top_challenge_pct} of {top_challenge} right , and it still separates one candidate from another .
+[challenge] the best challenge available to me is {top_challenge} .
+[challenge] {top_challenge} discriminates better than anything else I am measured on .
+[challenge] at {top_challenge_pct} , {top_challenge} is neither too easy to matter nor too hard to score .
+[challenge] what teaches me most now is {top_challenge} , solved {top_challenge_pct} of the time .
+
+[saturation] {saturated} is SATURATED and no longer tells candidates apart , so a harder variant was spawned from it .
+[saturation] I solve {saturated} almost every time now and it has stopped discriminating .
+[saturation] {saturated} is spent ; a harder variant has taken its place .
+[saturation] there is nothing left for me in {saturated} , so the benchmark moved .
+[saturation] {saturated} became SATURATED , which is the signal to make the work harder .
+
+[memory] I have {corpus} solved programs on record and {library} learned abstractions .
+[memory] my corpus stands at {corpus} programs ; the library holds {library} .
+[memory] across the whole run {accepted_total} of {candidates_total} candidates were kept .
+[memory] {corpus} solved programs sit in the record , and every operator learns from them .
+[memory] out of {candidates_total} candidates in all , {accepted_total} survived .
+[memory] the library has {library} abstractions and the corpus has {corpus} entries .
+[memory] everything I know how to do is in those {corpus} programs .
+[memory] {accepted_total} accepted from {candidates_total} tried , which is the whole history of my changes .
+[memory] I remember {corpus} solutions and have distilled {library} of them into abstractions .
+
+# --- second seed batch: added because the chain was splicing on the sparsest topics ---
+
+[verdict_none] Of the {candidates} candidates I tried , not one earned its place .
+[verdict_none] Nothing survived this generation ; {best_operator} was the closest and it fell short .
+[verdict_none] I kept the champion I already had , because {candidates} attempts gave me no reason to replace it .
+[verdict_none] The evidence for {best_operator} came to {best_delta_pp} points , which the tests will not accept .
+[verdict_none] All {candidates} changes were refused , and I would refuse them again on this evidence .
+[verdict_none] {best_operator} led the field at {best_delta_pp} points and still did not clear the bar .
+[verdict_none] No change was retained ; the gains I saw were inside the noise .
+[verdict_none] I stayed where I was , which is the correct outcome when {candidates} candidates prove nothing .
+[verdict_none] Every one of the {candidates} was rejected , the best of them by only a small margin .
+[verdict_none] The generation ends without an acceptance and without a loss .
+[verdict_none] {best_operator} was the best I had and {best_delta_pp} points is not a result .
+[verdict_none] I tried {candidates} things and learned that none of them work yet .
+[screening] {rejects_screened} candidates solved fewer held-out tasks than the champion and were dropped there .
+[screening] The held-out screen removed {rejects_screened} of them before any test was run .
+[screening] {rejects_screened} never reached the statistics , because they lost tasks the champion already had .
+[screening] I did not spend evidence on {rejects_screened} candidates that were behind from the first split .
+[screening] Screening is cheap and it took {rejects_screened} out of the running immediately .
+[screening] Of what I proposed , {rejects_screened} failed the first look and went no further .
+[screening] {rejects_screened} were behind on the held-out count and I stopped evaluating them .
+[screening] The first split disqualified {rejects_screened} candidates outright .
+[supporting] The adversarial split gave me {adv_solved} of {adv_n} , which is the number I trust least and watch most .
+[supporting] Search cost me {nodes} nodes per task on average .
+[supporting] I held {regr_n} regression tasks and lost none of them .
+[supporting] On operators the language does not contain I solved {adv_solved} of {adv_n} .
+[supporting] The regression suite stood at {regr_n} tasks and stayed intact .
+[supporting] Nodes per task came to {nodes} , which is the price of the current strategy .
+[supporting] Against hidden operators I managed {adv_solved} of {adv_n} .
+[supporting] Everything I had already solved , {regr_n} tasks , I still solve .
+[standing] I closed generation {gen} solving {heldout_solved} of {heldout_n} .
+[standing] The secret split put me at {heldout_pct} after generation {gen} .
+[standing] Generation {gen} leaves me at {heldout_solved} solved out of {heldout_n} .
+[standing] My standing is {heldout_pct} , measured on tasks I have never been tuned against .
+[standing] After {gen} generations the held-out rate is {heldout_pct} .
+[standing] I solve {heldout_solved} of the {heldout_n} tasks I am scored on .
+[memory] There are {corpus} solved programs on record and {library} abstractions drawn from them .
+[memory] Across the whole run I have accepted {accepted_total} of {candidates_total} candidates .
+[memory] The corpus holds {corpus} programs ; the library holds {library} .
+[memory] {accepted_total} changes have survived out of {candidates_total} attempted .
+[memory] I remember {corpus} solutions and have generalised {library} of them into abstractions .
+[memory] My acceptance rate over the run is {accepted_total} out of {candidates_total} .
+[challenge] {top_challenge} still separates good candidates from bad , at {top_challenge_pct} solved .
+[challenge] The family that teaches me most is {top_challenge} , where I manage {top_challenge_pct} .
+[challenge] I am at {top_challenge_pct} on {top_challenge} , which is why it is worth measuring .
+[challenge] {top_challenge} carries the most information about whether a change helped .
+[challenge] Of everything I am scored on , {top_challenge} is the family with room left in it .
+[regression_loss] {rejects_regression} candidates LOST GROUND on tasks I had already solved .
+[regression_loss] I refused {rejects_regression} changes that broke something working .
+[regression_loss] {rejects_regression} of them traded old solutions for new ones , which is not progress .
+[saturation] I solve {saturated} almost every time now , so it has stopped telling me anything .
+[saturation] {saturated} is SATURATED and a harder variant has been spawned from it .
+[saturation] Nothing is learned from {saturated} any more ; it discriminates between nothing .
+[verdict_accept] {best_operator} gained {best_delta_pp} points and is the NEW CHAMPION .
+[verdict_accept] I accepted {best_operator} , which cleared both tests at {best_delta_pp} points .
+[verdict_accept] One of the {candidates} survived : {best_operator} , worth {best_delta_pp} points .
