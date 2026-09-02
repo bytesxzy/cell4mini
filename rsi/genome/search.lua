@@ -18,6 +18,7 @@ function M.solve(task, ctx)
   local policy = ctx.policy
   local sig, equal, P = ctx.sig, ctx.equal, ctx.program
   local INV = ctx.inverses
+  local CONSTS = ctx.constants
   local train = task.train
   local n = #train
   local inputs, targets = {}, {}
@@ -319,12 +320,27 @@ function M.solve(task, ctx)
     local outs = {}
     for i = 1, n do outs[i] = inputs[i] end
     consider(in_type, policy.leaf_cost, P.var(), outs)
+    local function leaf_const(v, ty, c)
+      local o = {}
+      for i = 1, n do o[i] = v end
+      return consider(ty, c, P.const(v, ty), o)
+    end
     for ty, list in pairs(policy.consts) do
       for _, v in ipairs(list) do
-        local o = {}
-        for i = 1, n do o[i] = v end
-        local s = consider(ty, policy.const_cost, P.const(v, ty), o)
+        local s = leaf_const(v, ty, policy.const_cost)
         if s then return { program = s, nodes = nodes, partial = 1 } end
+      end
+    end
+    -- Literals read off this task's own examples. Widening the global pool was measured and lost
+    -- 3.5pp, because every extra leaf multiplies through every level; these are few and relevant.
+    if policy.derived_consts and CONSTS then
+      local ok, derived = pcall(CONSTS.derive, train, CONSTS.pool_set(policy.consts),
+        policy.derived_const_cap or 8)
+      if ok then
+        for _, d in ipairs(derived) do
+          local s = leaf_const(d.value, d.ty, policy.derived_const_cost or policy.const_cost)
+          if s then return { program = s, nodes = nodes, partial = 1 } end
+        end
       end
     end
   end

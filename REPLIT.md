@@ -25,6 +25,15 @@ the candidate evaluations. If that is too slow, lower `heldout_per_family` and `
 in `rsi/config.lua`; the trade-off is statistical power, and the README explains why the held-out
 split is large rather than the acceptance threshold loose.
 
+## The files it writes about itself
+
+| file | what it is |
+|---|---|
+| `JOURNAL.md` | regenerated every generation: where it stands, what it considers worth being challenged by, and every accepted change with its evidence. Read this first. |
+| `rsi/data/corpus.jsonl` | the training data — every task it has ever solved, with the program it found and the one the generator used |
+| `rsi/data/journal.jsonl` | the same milestones, machine-readable |
+| `rsi/state/lineage.jsonl` | every candidate ever tried and exactly why it was refused |
+
 ## Watching the console
 
 The dashboard is a static page that polls three files the loop writes. In a second shell:

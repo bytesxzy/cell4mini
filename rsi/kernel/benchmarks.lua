@@ -56,7 +56,7 @@ function M.build_splits(s, cfg, gen)
     for _, t in ipairs(tasks.generate_set(f, "train:" .. gen, cfg.train_per_family)) do splits.train[#splits.train + 1] = t end
     for _, t in ipairs(tasks.generate_set(f, s.secret_salt .. ":h" .. s.heldout_epoch, cfg.heldout_per_family)) do splits.heldout[#splits.heldout + 1] = t end
   end
-  for _, f in ipairs(cfg.adversarial_families) do
+  for _, f in ipairs(s.adversarial_families or cfg.adversarial_families) do
     if tasks.families[f] then
       for _, t in ipairs(tasks.generate_set(f, s.secret_salt .. ":adv:" .. gen, cfg.adversarial_per_family)) do splits.adversarial[#splits.adversarial + 1] = t end
     end
@@ -126,6 +126,29 @@ local function spawn_variant(s, base_name)
   tasks.families[name] = def
   tasks.family_order[#tasks.family_order + 1] = name
   return name
+end
+
+-- A family that is nearly always solved AND has stopped separating candidates has nothing left to
+-- teach. Rather than wait for an acceptance to trigger a rotation, spawn a harder variant from it as
+-- soon as the challenge ranking says it is spent. This is how the system goes looking for harder
+-- work instead of waiting to be given it.
+function M.spawn_from_saturation(s, saturated, gen)
+  s.saturation_spawned = s.saturation_spawned or {}
+  for _, fam in ipairs(saturated or {}) do
+    if not s.saturation_spawned[fam] then
+      local variant = spawn_variant(s, fam)
+      if variant then
+        s.saturation_spawned[fam] = gen
+        return string.format("saturation at gen %d: '%s' is solved almost always and no longer separates candidates -> spawned harder variant %s", gen, fam, variant)
+      end
+    end
+  end
+  return nil
+end
+
+-- Point the adversarial split at whatever currently discriminates best.
+function M.set_adversarial(s, families)
+  if families and #families > 0 then s.adversarial_families = families end
 end
 
 -- Called after an acceptance. Returns a description of any rotation performed.

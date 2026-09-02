@@ -11,6 +11,13 @@ return {
   jit_min_match = 1,        -- minimum matching examples for a program to count as partial evidence
   coerce_ic = false,        -- let small non-negative ints feed colour slots and colours feed int slots
   consts = { I = { 0, 1, 2, 3 }, C = { 0, 1, 2, 3, 4, 5 } },
+  -- Measured flat on this distribution (0.0pp on 300 mixed tasks, 0.0pp on 180 large-value tasks):
+  -- the generated values are small and the pool above already covers them, so 86% of tasks derive
+  -- nothing. Kept because it is the standard remedy where literals matter (real ARC uses ten colours
+  -- and dimensions to 30) and the mutation operators can switch it on if evidence ever appears.
+  derived_consts = false,   -- also mine example-invariant literals from the task's own I/O pairs
+  derived_const_cap = 8,    -- at most this many, ranked by how much the examples demand them
+  derived_const_cost = 1,   -- cost of a derived literal leaf
   cost = {},                -- per-op cost overrides, learned by prior fitting
   cond_cost = {},           -- task-feature bucket -> {op -> cost}, learned task-conditioned priors
   cond_ops = {},            -- task-feature bucket -> {op -> true}, per-bucket enumeration whitelist

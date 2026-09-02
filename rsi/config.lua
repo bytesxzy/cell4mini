@@ -25,15 +25,24 @@ return {
   candidates_per_gen = 4,
   -- benchmark management
   pressure_limit = 2,           -- same family drives 2 consecutive acceptances -> rotate secret split + spawn variant
+  -- Challenge ranking (rsi/kernel/challenge.lua). The four components are measured; these weights
+  -- are a declared convention, shown on the console and in JOURNAL.md so they can be argued with.
+  challenge_weights = { information = 0.40, discrimination = 0.35, headroom = 0.15, freshness = 0.10 },
+  saturation_solve_floor = 0.92, -- solved at least this often ...
+  saturation_disc_floor = 0.05,  -- ... AND no longer separating candidates = spent, spawn a variant
+  adversarial_from_ranking = true, -- point the adversarial split at whatever discriminates best
   -- research cadence (seconds)
   research_interval = 5400,     -- 1.5 h
   arc_per_fetch = 25,
   arxiv_max = 30,
+  -- Queries aimed at the gaps declared in rsi/kernel/mechanisms.lua, not at machinery already built.
   arxiv_queries = {
     'all:"program synthesis"',
-    'all:"library learning"',
-    'all:"self-improvement" AND cat:cs.AI',
-    'all:"bottom-up enumeration" OR all:"observational equivalence"',
     'all:"ARC-AGI" OR all:"abstraction and reasoning corpus"',
+    'all:"equality saturation" OR all:"e-graph"',
+    'all:"sketch" AND all:"synthesis"',
+    'all:"conflict-driven" OR all:"counterexample-guided"',
+    'all:"type-directed" AND all:"synthesis"',
+    'all:"library learning" OR all:"anti-unification"',
   },
 }

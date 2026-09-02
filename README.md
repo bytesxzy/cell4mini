@@ -69,6 +69,26 @@ Mean search nodes per task fell from 1072 to 787. On the harness's own secret he
 champion went from 141/200 to 152/200. Binary meet was validated separately against
 bidirectional-without-it on four further independent sets (+2.3, +1.7, +1.7, +2.0 pp; 24 wins, 1 loss).
 
+### Round two: what the failures said next
+
+After the bidirectional engine landed, the remaining failures were profiled rather than guessed at.
+Two measurements settled the direction:
+
+* **Task-derived constants** (mine example-invariant literals from the I/O pairs, as FlashFill and
+  its descendants do) were built and measured at **0.0pp** on 300 mixed tasks and **0.0pp** on 180
+  large-value tasks. The reason is specific and checkable: 86% of generated tasks derive nothing,
+  because the values in play are small and the global pool already covers them. The code is kept and
+  exposed to the mutation operators, defaulted off, because it is the right remedy where literals
+  actually matter — real ARC has ten colours and dimensions to 30 — but nothing here justifies it.
+* **The remaining failures are reach-limited, not ordering-limited.** Thirteen times the node budget
+  (1500 → 20000) buys **+4.4pp**, and 1500 → 3000 buys 0.4pp. Bank capacities are flat in both
+  directions. So no amount of better search ordering or more compute is the lever; what is missing is
+  the ability to express programs the DSL cannot reach at all.
+
+That is why the work after this point went into the benchmark and research machinery rather than into
+more search tricks: the search is close to the ceiling of what this operator set can express, and the
+honest next move is to face harder external problems, not to grind the internal ones.
+
 ### What was tried and did not work
 
 Reported because the negatives cost as much to establish as the positives, and a list of only
@@ -81,6 +101,60 @@ successes would be a sales pitch:
   meaning they are out of the DSL's reach rather than cut short.
 * **Deepening the backward chain** (`back_max_cost` 6 → 9) and **widening the binary meet**
   (`binary_meet_cap` 24 → 64, `binary_meet_depth` 2 → 4): all exactly flat. None of these limits binds.
+
+## Choosing what to be challenged by
+
+`rsi/kernel/challenge.lua` ranks every task family by how much it can still teach, from the system's
+own measurements:
+
+* **information** — 4p(1−p) on the solve rate. A family solved 100% or 0% of the time carries no
+  information about whether a change helped, because every candidate scores the same on it. This is
+  item information from item response theory, in its simplest form.
+* **discrimination** — how often candidates actually differ from the champion there. This is the
+  count of discordant pairs, which is exactly what the sign test consumes, so it measures the
+  benchmark's *power to detect an improvement at all*. A family that never produces a discordant pair
+  can never justify an acceptance however hard it looks.
+* **headroom** — mean partial credit on the tasks it fails.
+* **freshness** — how long since the family last discriminated, which is how saturation shows up
+  before the solve rate does.
+
+A family it never solves is **not** a good challenge and ranks low on purpose: difficulty for its own
+sake is not the objective, telling improvement from noise is. The four components are measured; the
+weights that combine them are a declared convention in `rsi/config.lua`, printed on the console and in
+`JOURNAL.md` so they can be argued with. That split is what "unbiased" means here — nothing is scored
+by preference, and the one judgement call is shown as one.
+
+The ranking is used, not just displayed: the adversarial split is aimed at whatever currently
+discriminates best, and a family that is both nearly always solved and no longer separating
+candidates has a harder variant spawned from it immediately, rather than waiting for an acceptance to
+trigger a rotation. That is the system going looking for harder work.
+
+## The record it keeps
+
+Three files, answering different questions:
+
+| file | question it answers |
+|---|---|
+| `rsi/data/corpus.jsonl` | **the training data.** Every task ever solved: family, feature bucket, the program found, the program the generator actually used, and the generation. Every mutation operator learns from this and nothing else. |
+| `rsi/data/journal.jsonl` | the milestones: accepted changes with evidence, benchmark rotations, research fetches. |
+| `JOURNAL.md` | the same, rendered for a human, regenerated every generation. |
+| `rsi/state/lineage.jsonl` | every candidate ever tried and why it was refused. |
+
+The generator's own expression is recorded in the corpus for the reader; the solver is handed
+`tasks.solver_view`, which omits it along with the test examples.
+
+## Research, and what it can honestly do
+
+`rsi/kernel/mechanisms.lua` is an explicit registry: what the reasoning is built from, what was
+implemented and **measured and discarded** (with the numbers that killed it), and what has never been
+built here — e-graphs, conflict-driven learning, sketches, SMT, MCTS, abstraction refinement. arXiv
+abstracts are scored against it, and a paper touching a declared gap outranks one restating machinery
+that already exists, so the feed is ordered by relevance to what is missing rather than by date.
+
+This is keyword matching against an explicit list. It is **not** comprehension — there is no model
+here to read anything — and the console says so in those words. The registry's real value is the
+second field: without a record of what was tried and failed, the system would happily re-propose the
+same losing ideas and a reader would have no way to tell an untried idea from a tried one.
 
 ## What actually improves, and how
 

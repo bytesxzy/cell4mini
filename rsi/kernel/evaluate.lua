@@ -6,6 +6,7 @@ local sandbox = require("rsi.kernel.sandbox")
 local tasks = require("rsi.kernel.tasks")
 local features = require("rsi.kernel.features")
 local inverses = require("rsi.kernel.inverses")
+local constants = require("rsi.kernel.constants")
 local M = {}
 
 local function verify(node, prims, examples)
@@ -38,6 +39,7 @@ function M.run(g, task_list, cfg)
       program = program,
       features = features.bucket,
       inverses = inverses,
+      constants = constants,
     }
     local t1 = os.clock()
     local ok, res, exhausted = sandbox.run(instructions, g.solve, view, ctx)

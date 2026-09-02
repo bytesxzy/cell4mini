@@ -5,6 +5,9 @@ rsi/data/
 rsi/www/state.json
 rsi/www/progress.json
 rsi/www/lineage.jsonl
+# generated ledger (regenerated every generation from rsi/data/journal.jsonl)
+JOURNAL.md
+
 # transpiler output
 source/execute.lua
 source/index.html

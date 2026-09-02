@@ -13,6 +13,8 @@ local lineage = require("rsi.kernel.lineage")
 local research = require("rsi.kernel.research")
 local dashboard = require("rsi.kernel.dashboard")
 local features = require("rsi.kernel.features")
+local challenge = require("rsi.kernel.challenge")
+local journal = require("rsi.kernel.journal")
 local M = {}
 
 local ROOT = cfg.root
@@ -145,6 +147,8 @@ local function write_dashboard(state, bench, champ_g, champ_r, external)
       pressure = bench.pressure, rotations = #bench.rotations, regression_size = #bench.regression, arc_on_disk = arc_on_disk },
     research = { last = state.last_research, next_in_s = (state.last_research or 0) + cfg.research_interval - os.time(),
       papers = research.recent_papers(ROOT, 12) },
+    challenge = state.challenge, saturated = state.saturated,
+    corpus_size = journal.corpus_size(ROOT),
     meta = state.meta, log = state.log,
   })
   dashboard.ensure_html(ROOT)
@@ -211,6 +215,16 @@ function M.run_generation(opts)
     progress("research: fetching arXiv + ARC")
     local r = research.run(ROOT, cfg, state)
     log(state, string.format("research: %d new papers, %d new ARC tasks%s", r.papers_new, r.arc_new, #r.errors > 0 and (" (" .. #r.errors .. " fetch errors)") or ""))
+    journal.record(ROOT, { kind = "research", gen = gen, papers_new = r.papers_new,
+      arc_new = r.arc_new, errors = #r.errors, gaps = r.gaps })
+  end
+
+  -- The adversarial split is aimed at whatever currently separates candidates best, rather than at a
+  -- fixed list. Chosen from the previous generation's ranking so this generation's splits are built
+  -- before its own statistics exist.
+  if cfg.adversarial_from_ranking and state.challenge and #state.challenge > 0 then
+    benchmarks.set_adversarial(bench,
+      challenge.pick_adversarial(state.challenge, #cfg.adversarial_families, cfg.adversarial_families))
   end
 
   -- benchmarks
@@ -237,6 +251,16 @@ function M.run_generation(opts)
     gen, champ_fp, champ_r.heldout.solved, champ_r.heldout.n, champ_r.train.solved, champ_r.train.n,
     champ_r.adversarial.solved, champ_r.adversarial.n, champ_r.regression.solved, champ_r.regression.n, champ_r.external.solved, champ_r.external.n))
 
+  -- Challenge statistics. Difficulty comes from the champion's held-out and adversarial results;
+  -- discrimination is filled in per candidate below, since it is a property of the comparison rather
+  -- than of any one run.
+  state.family_stats = state.family_stats or {}
+  for _, split in ipairs({ champ_r.heldout, champ_r.adversarial }) do
+    for _, r in ipairs(split.per_task) do
+      challenge.update(state.family_stats, r.family, r.solved, r.partial, gen)
+    end
+  end
+
   -- evidence corpus: every visible-split solution and near-miss ever seen (never held-out data)
   state.corpus = state.corpus or {}
   state.near_corpus = state.near_corpus or {}
@@ -253,6 +277,24 @@ function M.run_generation(opts)
   end
   while #state.corpus > 3000 do table.remove(state.corpus, 1) end
   while #state.near_corpus > 800 do table.remove(state.near_corpus, 1) end
+
+  -- The durable training set. state.corpus is a rolling window the operators read; this file keeps
+  -- everything, so the record of what the system learned from does not get trimmed away.
+  do
+    local rows = {}
+    for i, r in ipairs(champ_r.train.per_task) do
+      if r.solved == 1 and r.program then
+        local t = splits.train[i]
+        rows[#rows + 1] = {
+          gen = gen, family = r.family, bucket = features.bucket(t),
+          in_type = t.in_type, out_type = t.out_type, program = r.program, nodes = r.nodes,
+          -- recorded for the reader only; the solver is handed tasks.solver_view, which omits it
+          generator = t.meta and t.meta.expr, depth = t.meta and t.meta.depth,
+        }
+      end
+    end
+    journal.add_corpus(ROOT, rows)
+  end
 
   -- candidates
   local ctx = { rng = rng, prims = champ_g.prims, train_results = champ_r.train, adversarial_results = champ_r.adversarial,
@@ -273,6 +315,10 @@ function M.run_generation(opts)
     -- that solves strictly fewer held-out tasks is rejected without running the other four splits.
     -- This is equivalent to the full rule, not a relaxation of it.
     local cand_r = { heldout = eval_split(loaded, splits.heldout, "candidate " .. k .. ": held-out", nil, extra) }
+    for i, cr in ipairs(cand_r.heldout.per_task) do
+      challenge.note_comparison(state.family_stats, cr.family,
+        cr.solved ~= champ_r.heldout.per_task[i].solved, gen)
+    end
     local accepted, reason, ev
     if cand_r.heldout.solved < champ_r.heldout.solved then
       local a, b = evaluate.vector(champ_r.heldout), evaluate.vector(cand_r.heldout)
@@ -320,10 +366,40 @@ function M.run_generation(opts)
     local driver = benchmarks.driver_family(splits.heldout, champ_r.heldout, best.r.heldout)
     local rotation = benchmarks.after_accept(bench, cfg, driver, gen)
     log(state, string.format("  retained candidate from %s; regression suite +%d (now %d); driver family %s", best.op, added, #bench.regression, tostring(driver)))
-    if rotation then log(state, "  " .. rotation) end
+    journal.record(ROOT, { kind = "accepted", gen = gen, operator = best.op, change = best.desc,
+      reason = best.entry.reason, before = champ_r.heldout.solve_rate, after = best.r.heldout.solve_rate,
+      driver = driver, fingerprint = genome.fingerprint(best.g) })
+    if rotation then
+      log(state, "  " .. rotation)
+      journal.record(ROOT, { kind = "rotation", gen = gen, detail = rotation })
+    end
     state.champion_cache = nil
     champ_g, champ_r = best.loaded, best.r
     out.accepted, out.operator, out.change = true, best.op, best.desc
+  end
+
+  -- challenge ranking, and the journal
+  local ranking = challenge.rank(state.family_stats, gen, cfg.challenge_weights)
+  local saturated = challenge.saturated(ranking, cfg.saturation_solve_floor, cfg.saturation_disc_floor)
+  state.challenge = ranking
+  state.saturated = saturated
+  local spawned = benchmarks.spawn_from_saturation(bench, saturated, gen)
+  if spawned then
+    log(state, "  " .. spawned)
+    journal.record(ROOT, { kind = "rotation", gen = gen, detail = spawned })
+  end
+  do
+    local ok_j, err_j = pcall(journal.render, ROOT, {
+      gen = gen, fingerprint = genome.fingerprint(champ_g),
+      heldout = { solved = champ_r.heldout.solved, n = champ_r.heldout.n,
+        rate = champ_r.heldout.solve_rate, lo = select(2, stats.wilson(champ_r.heldout.solved, champ_r.heldout.n)),
+        hi = select(3, stats.wilson(champ_r.heldout.solved, champ_r.heldout.n)) },
+      adversarial = champ_r.adversarial, regression = champ_r.regression, external = champ_r.external,
+      accepted_total = state.accepted_total, candidates_total = state.candidates_total,
+      corpus_size = journal.corpus_size(ROOT), library_size = #champ_g.lib, ops = #champ_g.base.ops,
+      challenge = ranking, saturated = saturated, heldout_epoch = bench.heldout_epoch,
+    })
+    if not ok_j then io.stderr:write("journal render failed: " .. tostring(err_j) .. "\n") end
   end
 
   local pruned = lineage.prune(ROOT, gen, 50)

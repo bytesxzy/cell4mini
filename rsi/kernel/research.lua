@@ -6,6 +6,7 @@
 --      keep a keyword-signal timeline, and surface them on the dashboard for the human researcher.
 -- Hypotheses that drive experiments come from the system's own experimental data (see mutate.lua).
 local json = require("rsi.kernel.json")
+local mechanisms = require("rsi.kernel.mechanisms")
 local M = {}
 
 local function fetch(url)
@@ -22,8 +23,10 @@ local function xml_unescape(s)
   return (s:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&"))
 end
 
-local SIGNALS = { "library learning", "bottom-up", "observational equivalence", "self-improv", "program synthesis",
-  "verification", "search", "abstraction", "ARC", "test-time", "curriculum", "neural-guided", "enumerat" }
+-- Papers are ranked against rsi/kernel/mechanisms.lua: what this system already implements, what it
+-- measured and discarded, and what it has never had. A paper touching a declared gap outranks one
+-- describing machinery that is already here. This is keyword matching against an explicit list, not
+-- comprehension -- there is no model here to read anything -- and the console says so.
 
 local function fetch_arxiv(root, cfg, log)
   local papers_path = root .. "/data/research/papers.jsonl"
@@ -44,10 +47,10 @@ local function fetch_arxiv(root, cfg, log)
           known[id] = true
           title = xml_unescape(title:gsub("%s+", " "))
           summary = xml_unescape((summary or ""):gsub("%s+", " "))
-          local hits = {}
-          local text = (title .. " " .. summary):lower()
-          for _, s in ipairs(SIGNALS) do if text:find(s:lower(), 1, true) then hits[#hits + 1] = s signals[s] = (signals[s] or 0) + 1 end end
-          json.append_line(papers_path, { id = id, title = title, published = published, query = q, signals = hits,
+          local score, gaps, already, note = mechanisms.score(title .. " " .. summary)
+          for _, g in ipairs(gaps) do signals[g] = (signals[g] or 0) + 1 end
+          json.append_line(papers_path, { id = id, title = title, published = published, query = q,
+            addresses_gap = gaps, already_have = already, actionability = score, why = note,
             summary = summary:sub(1, 600), fetched = os.time() })
           new_count = new_count + 1
         end
@@ -105,16 +108,30 @@ function M.run(root, cfg, state)
   local papers, signals = fetch_arxiv(root, cfg, log)
   local arc = fetch_arc(root, cfg, log)
   state.last_research = os.time()
-  local entry = { time = os.time(), papers_new = papers, arc_new = arc, signals = signals, errors = logs }
+  local entry = { time = os.time(), papers_new = papers, arc_new = arc, signals = signals, errors = logs,
+    gaps = mechanisms.gap_names() }
   json.append_line(root .. "/data/research/log.jsonl", entry)
   return entry
 end
 
+-- Most actionable first, then most recent. A feed ordered by date buries the one paper that touches
+-- something the system does not have under thirty that restate what it already does.
 function M.recent_papers(root, n)
   local all = json.read_lines(root .. "/data/research/papers.jsonl")
+  local recent = {}
+  for i = #all, math.max(1, #all - 300 + 1), -1 do recent[#recent + 1] = all[i] end
+  table.sort(recent, function(a, b)
+    local sa, sb = a.actionability or 0, b.actionability or 0
+    if sa ~= sb then return sa > sb end
+    return (a.fetched or 0) > (b.fetched or 0)
+  end)
   local out = {}
-  for i = #all, math.max(1, #all - n + 1), -1 do out[#out + 1] = all[i] end
+  for i = 1, math.min(n, #recent) do out[i] = recent[i] end
   return out
+end
+
+function M.registry()
+  return mechanisms
 end
 
 return M
