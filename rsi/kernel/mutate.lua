@@ -6,7 +6,8 @@ local genome = require("rsi.kernel.genome")
 local M = {}
 
 M.operators = {
-  "library_learn", "parameterized_abstraction", "near_miss_abstraction", "fit_priors", "fit_conditional_priors", "reorder_ops", "prune_dsl_bulk",
+  "library_learn", "parameterized_abstraction", "near_miss_abstraction", "fit_priors", "fit_conditional_priors",
+  "fit_conditional_ops", "reorder_ops", "prune_dsl_bulk",
   "perturb_hyper", "const_tune", "prune_library", "drop_op", "restore_op", "strategy_swap",
 }
 
@@ -17,7 +18,7 @@ local function solved_programs(ctx)
   if ctx.corpus and #ctx.corpus > 0 then
     for _, e in ipairs(ctx.corpus) do
       local ok, node = pcall(program.parse, e.expr)
-      if ok then out[#out + 1] = { id = e.family .. ":" .. e.gen, node = node } end
+      if ok then out[#out + 1] = { id = e.family .. ":" .. e.gen, node = node, bucket = e.bucket } end
     end
     return out
   end
@@ -57,14 +58,22 @@ local function abstraction_candidates(g, progs, min_size)
         if not local_seen[s] then
           local_seen[s] = true
           freq[s] = (freq[s] or 0) + 1
-          info[s] = info[s] or { node = st, size = program.size(st) }
+          info[s] = info[s] or { node = st, size = program.size(st), buckets = {} }
+          if p.bucket then info[s].buckets[p.bucket] = (info[s].buckets[p.bucket] or 0) + 1 end
         end
       end
     end
   end
   local list = {}
   for s, f in pairs(freq) do
-    if not lib_has(g, s) then list[#list + 1] = { expr = s, uses = f, size = info[s].size, node = info[s].node, gain = (info[s].size - 1) * math.max(f - 1, 0) + f } end
+    if not lib_has(g, s) then
+      -- the bucket this abstraction actually came from, when one clearly dominates
+      local top, tc = nil, 0
+      for b, c in pairs(info[s].buckets) do if c > tc or (c == tc and top and b < top) then top, tc = b, c end end
+      local bucket = (top and tc >= math.max(2, math.ceil(0.6 * f))) and top or nil
+      list[#list + 1] = { expr = s, uses = f, size = info[s].size, node = info[s].node, bucket = bucket,
+        gain = (info[s].size - 1) * math.max(f - 1, 0) + f }
+    end
   end
   table.sort(list, function(a, b) if a.gain ~= b.gain then return a.gain > b.gain end return a.expr < b.expr end)
   return list
@@ -95,9 +104,13 @@ local function add_abstractions(g, cands, ctx, max_add, tag)
     local ret = program.ret_type(c.node, ctx.prims, arg)
     if arg and ret and ret ~= "?" and (c.uses >= 2 or tag == "near_miss") then
       local name = next_lib_name(g)
-      g.lib[#g.lib + 1] = { name = name, expr = c.expr, arg = arg, ret = ret, origin = tag, uses = c.uses }
+      -- Measured: every extra primitive widens the branching factor at every enumeration level, and
+      -- a library of 8 cost 2.7pp on 300 tasks. So an abstraction is admitted only into the task
+      -- feature bucket it was mined from; elsewhere the search never sees it and pays nothing.
+      g.lib[#g.lib + 1] = { name = name, expr = c.expr, arg = arg, ret = ret, origin = tag,
+        uses = c.uses, bucket = c.bucket }
       g.policy.cost[name] = math.max(1, (g.policy.default_cost or 2) - 1)
-      added[#added + 1] = name .. "=" .. c.expr .. " (uses " .. c.uses .. ")"
+      added[#added + 1] = name .. "=" .. c.expr .. " (uses " .. c.uses .. (c.bucket and (", " .. c.bucket) or ", global") .. ")"
     end
   end
   return added
@@ -314,6 +327,44 @@ function ops_impl.prune_dsl_bulk(g, ctx)
   return string.format("pruned %d ops unused across %d solutions: %s", #removed, #progs, table.concat(removed, " "))
 end
 
+-- Per-bucket enumeration whitelist for the search's narrow phase: the operators that have ever
+-- appeared in a solution of this task shape. Alone this is a bad trade (it excludes operators the
+-- task turns out to need); it pays off only because the search falls back to the full operator set
+-- with the remaining budget, so the narrow phase can only win. The harness decides whether it did.
+function ops_impl.fit_conditional_ops(g, ctx)
+  if not ctx.corpus or #ctx.corpus < 60 then return nil end
+  local by_bucket = {}
+  for _, e in ipairs(ctx.corpus) do
+    if e.bucket then
+      local ok, node = pcall(program.parse, e.expr)
+      if ok then
+        local b = by_bucket[e.bucket]
+        if not b then b = { ops = {}, n = 0 } by_bucket[e.bucket] = b end
+        b.n = b.n + 1
+        for _, op in ipairs(program.ops_used(node)) do b.ops[op] = true end
+      end
+    end
+  end
+  local min_n = ctx.rng:pick({ 10, 12, 16, 20 })
+  local cond, fitted = {}, {}
+  for bucket, v in pairs(by_bucket) do
+    if v.n >= min_n then
+      local count = 0
+      for _ in pairs(v.ops) do count = count + 1 end
+      -- a whitelist that is nearly the whole DSL narrows nothing and only costs a phase
+      if count < #g.base.ops * 0.6 then
+        cond[bucket] = v.ops
+        fitted[#fitted + 1] = bucket .. "(" .. count .. " ops/" .. v.n .. " sol)"
+      end
+    end
+  end
+  if #fitted == 0 then return nil end
+  g.policy.cond_ops = cond
+  g.policy.two_phase = true
+  table.sort(fitted)
+  return string.format("per-bucket enumeration whitelists (min %d solutions): %s", min_n, table.concat(fitted, " "))
+end
+
 function ops_impl.reorder_ops(g, ctx)
   local progs = solved_programs(ctx)
   if #progs < 3 then return nil end
@@ -332,8 +383,14 @@ end
 function ops_impl.perturb_hyper(g, ctx)
   local rng = ctx.rng
   local p = g.policy
-  local choice = rng:int(1, 7)
-  if choice == 7 then
+  local choice = rng:int(1, 9)
+  if choice == 9 then
+    p.two_phase = not p.two_phase
+    return "two_phase -> " .. tostring(p.two_phase)
+  elseif choice == 8 then
+    p.phase1_frac = rng:pick({ 0.3, 0.4, 0.5, 0.6, 0.7 })
+    return "phase1_frac -> " .. p.phase1_frac
+  elseif choice == 7 then
     p.coerce_ic = not p.coerce_ic
     return "coerce_ic (int<->colour bank sharing) -> " .. tostring(p.coerce_ic)
   elseif choice == 1 then

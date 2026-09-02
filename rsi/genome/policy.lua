@@ -13,4 +13,7 @@ return {
   consts = { I = { 0, 1, 2, 3 }, C = { 0, 1, 2, 3, 4, 5 } },
   cost = {},                -- per-op cost overrides, learned by prior fitting
   cond_cost = {},           -- task-feature bucket -> {op -> cost}, learned task-conditioned priors
+  cond_ops = {},            -- task-feature bucket -> {op -> true}, per-bucket enumeration whitelist
+  two_phase = true,         -- try the narrow whitelist first, then fall back to the full operator set
+  phase1_frac = 0.5,        -- share of the node budget given to the narrow phase
 }

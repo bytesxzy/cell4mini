@@ -30,7 +30,7 @@ function M.load(dir)
       local node = program.parse(e.expr)
       local f = program.compile(node, prims)
       local types = e.arg2 and { e.arg, e.arg2 } or { e.arg }
-      prims[e.name] = { f = f, t = types, r = e.ret, learned = true, expr = e.expr, name = e.name }
+      prims[e.name] = { f = f, t = types, r = e.ret, learned = true, expr = e.expr, name = e.name, bucket = e.bucket }
       order[#order + 1] = e.name
       lib_ok[#lib_ok + 1] = e
     end)

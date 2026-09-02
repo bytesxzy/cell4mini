@@ -225,15 +225,31 @@ function M.step(opts)
     local dir = lineage.snapshot(ROOT, gen, tag, cand_g)
     local loaded = genome.load(dir)
     local extra = { candidate = tag, operator = op, change = desc }
-    local cand_r = eval_all(loaded, splits, external, "candidate " .. k, extra)
-    local accepted, reason, ev = decide(champ_r, cand_r, gen .. ":" .. k)
+    -- Cheap screen: every acceptance clause requires a non-negative held-out delta, so a candidate
+    -- that solves strictly fewer held-out tasks is rejected without running the other four splits.
+    -- This is equivalent to the full rule, not a relaxation of it.
+    local cand_r = { heldout = eval_split(loaded, splits.heldout, "candidate " .. k .. ": held-out", nil, extra) }
+    local accepted, reason, ev
+    if cand_r.heldout.solved < champ_r.heldout.solved then
+      local a, b = evaluate.vector(champ_r.heldout), evaluate.vector(cand_r.heldout)
+      local wins, losses = stats.wins_losses(a, b)
+      local d = cand_r.heldout.solve_rate - champ_r.heldout.solve_rate
+      accepted, reason = false, string.format("screened out on held-out (%.1fpp, wins %d / losses %d)", d * 100, wins, losses)
+      ev = { heldout_delta = d, wins = wins, losses = losses, screened = true }
+    else
+      cand_r.train = eval_split(loaded, splits.train, "candidate " .. k .. ": visible split", nil, extra)
+      cand_r.adversarial = eval_split(loaded, splits.adversarial, "candidate " .. k .. ": adversarial", nil, extra)
+      cand_r.regression = eval_split(loaded, splits.regression, "candidate " .. k .. ": regression suite", nil, extra)
+      cand_r.external = eval_split(loaded, external, "candidate " .. k .. ": external ARC", { nodes = cfg.external_nodes, seconds = cfg.external_seconds }, extra)
+      accepted, reason, ev = decide(champ_r, cand_r, gen .. ":" .. k)
+    end
     local entry = {
       gen = gen, candidate = k, operator = op, change = desc, accepted = accepted, reason = reason,
       champion_fp = champ_fp, candidate_fp = genome.fingerprint(loaded), snapshot = dir,
       champion_heldout = champ_r.heldout.solve_rate, candidate_heldout = cand_r.heldout.solve_rate,
       heldout_delta = ev.heldout_delta or 0, p_value = ev.p_value, ci = ev.ci, wins = ev.wins, losses = ev.losses,
       adversarial_delta = ev.adversarial_delta, train_delta = ev.train_delta, nodes_ratio = ev.nodes_ratio,
-      regression = ev.regression, external = cand_r.external.solved .. "/" .. cand_r.external.n,
+      regression = ev.regression, external = cand_r.external and (cand_r.external.solved .. "/" .. cand_r.external.n) or nil,
       time = os.time(),
     }
     json.write(dir .. "/evidence.json", { entry = entry, heldout = cand_r.heldout, adversarial = cand_r.adversarial, train = cand_r.train })

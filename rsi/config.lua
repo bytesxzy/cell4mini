@@ -3,7 +3,9 @@ return {
   root = "rsi",
   -- evaluation splits: tasks per family
   train_per_family = 10,       -- visible split: mutation operators may learn from its solutions
-  heldout_per_family = 12,     -- secret-salted split: drives acceptance; the genome never sees its seeds
+  heldout_per_family = 20,     -- secret-salted split: drives acceptance; the genome never sees its seeds.
+                               -- Sized for statistical power: a paired test on 120 items with ~8 discordant
+                               -- pairs cannot detect a true 3pp gain, so the bar stays high and n grows instead.
   adversarial_per_family = 8,  -- fresh every generation, hidden-op / larger-size families only
   adversarial_families = { "list_hidden", "list_wide", "grid_hidden", "grid_wide" },
   regression_cap = 160,        -- most recent N held-out tasks solved by accepted champions
