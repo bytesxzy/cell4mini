@@ -51,8 +51,14 @@ One generation (`rsi/kernel/cycle.lua`):
 5. Evaluate each candidate on all splits under the same deterministic node budget.
 6. Acceptance rule (`decide` in `cycle.lua`), in order: no regression loss → no external ARC loss →
    adversarial drop within tolerance → not an overfit (visible gain without held-out gain) →
-   significant paired held-out gain (bootstrap p<0.05 or sign test) **or** equal solves with ≤80% of the
-   search nodes and zero losses.
+   a held-out gain significant under **both** the paired bootstrap and the exact sign test
+   (α=0.05 each) **or** equal solves with ≤80% of the search nodes and zero losses.
+
+   The conjunction is not belt-and-braces, it is load-bearing. The first candidate the loop ever
+   accepted won 3 held-out tasks and lost 0 out of 200. The bootstrap gave p=0.047, because a
+   resample of 200 items almost always contains one of the three wins; the exact sign test gave
+   0.125, which is the honest number for three discordant pairs. Taking either test alone admits
+   that candidate. The rule now takes both, and that acceptance no longer stands.
 7. Retain: write the candidate over `rsi/genome/`, extend the regression suite with the newly solved
    held-out tasks, record which family drove the gain. If one family drives two consecutive acceptances,
    the secret held-out salt rotates and a harder variant of that family is spawned.
@@ -74,21 +80,29 @@ same budget, which changes which programs get solved, which changes the next rou
   *losses* (shrinking the integer constant pool cost 7pp). So the system cannot improve by turning
   knobs. Whatever real gains exist have to come from abstraction and from priors, which is why those
   operators got the most work.
-* **What the search actually gained from, and how that was found.** Three offline experiments on 300
-  fresh tasks, each a paired comparison against the champion:
+* **What was measured about the search, including a claim that failed to replicate.** Offline
+  experiments on 300 fresh tasks, each a paired comparison against the champion:
 
-  | change | held-out | nodes/task | verdict |
+  | change | held-out | nodes/task | reading |
   |---|---|---|---|
   | eleven hyperparameter variants | none better | — | the knob space is flat |
   | 8 learned abstractions added | −2.7pp | 932 | every extra primitive widens branching at every level |
   | same, scoped to their task bucket | −0.7pp | 899 | confirms branching cost is what binds |
   | per-bucket operator whitelist, hard | −1.7pp | 691 | 10 wins from the depth it buys, 15 losses from excluding needed operators |
-  | whitelist first, then full fallback | **+2.7pp, p=0.016** | 747 | keeps the wins, drops the losses, and is cheaper |
+  | whitelist first, then full fallback | +2.7pp, p=0.016 | 747 | looked like a real win |
 
-  The last row is the mechanism the search engine now supports (`two_phase` in
-  `rsi/genome/policy.lua`). It is **off until a mutation operator fits the whitelists**, so the
-  champion only gains it by proposing it as a candidate and passing the acceptance rule on its own
-  secret held-out split. The mechanism was supplied; the improvement has to be earned.
+  The last row did **not** replicate. Rerun against the live secret held-out split with a fresh
+  corpus, the same change scored −0.5pp (wins 4, losses 5, p=0.69). The explanation is mundane and
+  worth stating plainly: several variants were tried and the best was reported, so that p=0.016 was
+  never corrected for multiple comparisons. This is precisely the failure mode the harness exists to
+  catch, and it caught it in the author's own analysis. The honest summary is that the two-phase
+  mechanism is *available* and unproven, not that it works.
+
+  What survives from the experiments is the mechanism, not the win: the node budget binds on
+  branching factor rather than depth, which is why adding primitives costs and why anything that
+  narrows the enumeration is worth trying. `two_phase` and the per-bucket whitelists ship **off**
+  (`cond_ops` empty in `rsi/genome/policy.lua`). The champion gains them only by proposing them as a
+  candidate and passing the acceptance rule on its own secret split.
 * **Abstraction has less to bite on than the literature suggests, and this was measured here.**
   Library learning (DreamCoder) needs a task distribution with recurring structure. Uniformly random
   composition has none: across 99 solved tasks there were 17 multi-operator templates, every one used
@@ -146,3 +160,9 @@ of `.htaccess`. Logs: `journalctl -u cell4-rsi -f`. Runtime state lives in `rsi/
 `rsi/data` and is not in git.
 
 Research cadence and every budget/threshold live in `rsi/config.lua`.
+
+Only one generation may run at a time. `rsi/state/.lock` is taken with an atomic `mkdir` and released
+at the end of the generation; a second process refuses to start rather than interleave writes into
+the same lineage. A lock left behind by a killed process is broken after 30 minutes. This was not
+hypothetical during development: three loops ran against one state directory and produced an
+acceptance that no single run reproduced.

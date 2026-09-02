@@ -97,15 +97,21 @@ local function decide(champ, cand, gen)
   if d <= 0 and train_gain - d > cfg.overfit_gap then
     return false, string.format("overfit: visible-split gain %.1fpp with no held-out gain", train_gain * 100), ev
   end
-  local significant = d > 0 and (p < cfg.alpha or (sp < cfg.alpha and wins > losses))
+  -- Both tests must pass. With few discordant pairs the paired bootstrap is not measuring the
+  -- effect: with 3 wins and 0 losses out of 200 it reports p=0.047 simply because a resample almost
+  -- always contains one of the three wins, while the exact sign test correctly says 0.125. Taking
+  -- either test alone lets that through, so the rule takes the conjunction.
+  local significant = d > 0 and p < cfg.alpha and sp < cfg.alpha and wins > losses
   if significant then
-    return true, string.format("held-out +%.1fpp (p=%.3f, wins %d / losses %d)", d * 100, p, wins, losses), ev
+    return true, string.format("held-out +%.1fpp (bootstrap p=%.3f, sign p=%.3f, wins %d / losses %d)",
+      d * 100, p, sp, wins, losses), ev
   end
   if d >= 0 and losses == 0 and ev.nodes_ratio <= cfg.efficiency_ratio and ev.adversarial_partial_delta >= 0 then
     return true, string.format("efficiency: same solves with %.0f%% of the search nodes, no losses", ev.nodes_ratio * 100), ev
   end
   if d > 0 then
-    return false, string.format("held-out +%.1fpp not significant (p=%.3f, wins %d / losses %d)", d * 100, p, wins, losses), ev
+    return false, string.format("held-out +%.1fpp not significant (bootstrap p=%.3f, sign p=%.3f, wins %d / losses %d)",
+      d * 100, p, sp, wins, losses), ev
   end
   return false, string.format("no held-out gain (%.1fpp, wins %d / losses %d)", d * 100, wins, losses), ev
 end
@@ -152,9 +158,47 @@ local function log(state, msg)
   io.flush()
 end
 
+-- Single-writer lock. Two loops sharing rsi/state interleave their writes and silently corrupt the
+-- lineage; mkdir is atomic on every POSIX filesystem, so it is the lock. A stale lock (killed
+-- process) is broken after 30 minutes.
+local LOCK = ROOT .. "/state/.lock"
+local function acquire_lock()
+  if os.execute("mkdir '" .. LOCK .. "' 2>/dev/null") then return true end
+  local f = io.open(LOCK .. "/pid", "r")
+  local age = nil
+  if f then
+    local t = tonumber(f:read("*a") or "")
+    f:close()
+    if t then age = os.time() - t end
+  end
+  if age and age > 1800 then
+    os.execute("rm -rf '" .. LOCK .. "'")
+    return os.execute("mkdir '" .. LOCK .. "' 2>/dev/null") and true or false
+  end
+  return false
+end
+
+local function write_lock_stamp()
+  local f = io.open(LOCK .. "/pid", "w")
+  if f then f:write(tostring(os.time())) f:close() end
+end
+
+local function release_lock() os.execute("rm -rf '" .. LOCK .. "'") end
+
 function M.step(opts)
   opts = opts or {}
   ensure_dirs()
+  if not acquire_lock() then
+    error("another generation is already running (" .. LOCK .. "); refusing to share state")
+  end
+  write_lock_stamp()
+  local ok_run, err = pcall(M.run_generation, opts)
+  release_lock()
+  if not ok_run then error(err, 0) end
+  return err
+end
+
+function M.run_generation(opts)
   local state = load_state()
   local bench = benchmarks.load(ROOT)
   local gen = state.gen + 1
