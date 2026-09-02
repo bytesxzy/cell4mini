@@ -20,6 +20,17 @@ M.families = {
   grid_wide   = { in_type = "G", outs = { "G", "I", "L" }, depth = { 2, 3 }, hidden = true, maxdim = 8 },
 }
 
+-- Shared latent structure. Uniformly random composition produces tasks with no recurring motifs,
+-- so abstraction has nothing to find (measured: 17 multi-op templates across 99 solutions, all used
+-- once). Real domains are not like that. A motif pool, deterministic from the installation's world
+-- salt and shared by every split, gives the distribution genuine recurring structure that the solver
+-- must discover for itself: the motifs are never shown to it.
+M.world = { salt = "world-default", epoch = 1 }
+function M.set_world(salt, epoch)
+  M.world.salt = salt or M.world.salt
+  M.world.epoch = epoch or M.world.epoch
+end
+
 M.family_order = { "list_d1", "list_d2", "list_d3", "list_hidden", "list_wide", "grid_d1", "grid_d2", "grid_d3", "grid_hidden", "grid_wide" }
 
 local cat = ops.catalogue
@@ -59,8 +70,37 @@ local function rand_const(rng, ty, fam)
   return program.const(rng:int(fam.in_type == "G" and 1 or 0, 4), "I")
 end
 
+local gen_expr
+
+local motif_cache = {}
+local function motifs_for(in_type, allow_hidden)
+  local key = M.world.salt .. "|" .. M.world.epoch .. "|" .. in_type .. "|" .. tostring(allow_hidden)
+  local cached = motif_cache[key]
+  if cached then return cached end
+  local rng = RNG.new(key)
+  local fam = { in_type = in_type, maxlen = 7, maxval = 9, maxdim = 5 }
+  local pool, tries = {}, 0
+  local want = 8 + 4 * (M.world.epoch - 1)
+  local out_types = in_type == "L" and { "L", "L", "I" } or { "G", "G", "I", "L" }
+  while #pool < want and tries < 400 do
+    tries = tries + 1
+    local ty = rng:pick(out_types)
+    local e = gen_expr(rng, ty, 2, fam, allow_hidden, true)
+    if e then pool[#pool + 1] = { node = e, ty = ty } end
+  end
+  motif_cache[key] = pool
+  return pool
+end
+
 -- Build an expression of type `ty` that uses the input variable, with exactly `depth` ops on the var path.
-local function gen_expr(rng, ty, depth, fam, allow_hidden)
+-- `no_motifs` is set while building the motif pool itself, to stop the recursion.
+function gen_expr(rng, ty, depth, fam, allow_hidden, no_motifs)
+  if depth == 2 and not no_motifs then
+    local pool = motifs_for(fam.in_type, allow_hidden)
+    local cands = {}
+    for _, m in ipairs(pool) do if m.ty == ty then cands[#cands + 1] = m.node end end
+    if #cands > 0 and rng:float() < 0.6 then return program.clone(rng:pick(cands)) end
+  end
   if depth == 0 then
     if ty == fam.in_type then return program.var() end
     return nil
@@ -86,20 +126,20 @@ local function gen_expr(rng, ty, depth, fam, allow_hidden)
     local args, ok = {}, true
     for i, at in ipairs(o.t) do
       if i == vslot then
-        args[i] = gen_expr(rng, at, depth - 1, fam, allow_hidden)
+        args[i] = gen_expr(rng, at, depth - 1, fam, allow_hidden, no_motifs)
         if not args[i] then ok = false break end
       elseif at == "I" or at == "C" then
         -- occasionally a derived scalar from the input, mostly a constant
         if rng:float() < 0.25 and reachable(at, fam.in_type, 1, allow_hidden) then
-          args[i] = gen_expr(rng, at, 1, fam, allow_hidden) or rand_const(rng, at, fam)
+          args[i] = gen_expr(rng, at, 1, fam, allow_hidden, no_motifs) or rand_const(rng, at, fam)
         else
           args[i] = rand_const(rng, at, fam)
         end
       elseif at == fam.in_type then
         -- second structural argument: the input itself or a shallow transform of it
-        if rng:float() < 0.5 then args[i] = program.var() else args[i] = gen_expr(rng, at, 1, fam, allow_hidden) or program.var() end
+        if rng:float() < 0.5 then args[i] = program.var() else args[i] = gen_expr(rng, at, 1, fam, allow_hidden, no_motifs) or program.var() end
       else
-        args[i] = gen_expr(rng, at, math.max(depth - 1, 1), fam, allow_hidden)
+        args[i] = gen_expr(rng, at, math.max(depth - 1, 1), fam, allow_hidden, no_motifs)
         if not args[i] then ok = false break end
       end
     end
@@ -142,7 +182,7 @@ end
 function M.generate(family_name, salt, index, n_train, n_test)
   local fam = M.families[family_name]
   if not fam then error("unknown family " .. tostring(family_name)) end
-  n_train, n_test = n_train or 3, n_test or 1
+  n_train, n_test = n_train or 4, n_test or 1
   local rng = RNG.new(tostring(salt) .. ":" .. family_name .. ":" .. tostring(index))
   local prims = {}
   for name, o in pairs(cat) do prims[name] = o end
@@ -154,17 +194,19 @@ function M.generate(family_name, salt, index, n_train, n_test)
       local ok, f = pcall(program.compile, expr, prims)
       if ok then
         local examples, good = {}, true
-        local first_sig, all_same, any_identity = nil, true, 0
+        local train_sigs, any_identity = {}, 0
         for i = 1, n_train + n_test do
           local input = fam.in_type == "L" and rand_list(rng, fam) or rand_grid(rng, fam)
           local ok2, out = pcall(f, input)
           if not ok2 or not output_ok(out, out_ty) then good = false break end
-          local s = ops.sig(out)
-          if first_sig == nil then first_sig = s elseif s ~= first_sig then all_same = false end
+          if i <= n_train then train_sigs[ops.sig(out)] = true end
           if ops.equal(out, input) then any_identity = any_identity + 1 end
           examples[i] = { input = input, output = out }
         end
-        if good and not all_same and any_identity < 2 then
+        -- the training outputs alone must vary, otherwise a constant fits them and the task is degenerate
+        local distinct = 0
+        for _ in pairs(train_sigs) do distinct = distinct + 1 end
+        if good and distinct >= 2 and any_identity < 2 then
           local train, test = {}, {}
           for i = 1, n_train do train[i] = examples[i] end
           for i = 1, n_test do test[i] = examples[n_train + i] end

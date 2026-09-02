@@ -16,8 +16,12 @@ function M.solve(task, ctx)
   local budget, deadline = ctx.budget, ctx.deadline
   local clock = os.clock
 
+  -- op costs: task-conditioned table (learned recognition prior) if one matches this task's features,
+  -- otherwise the unconditional learned costs, otherwise the default
+  local feat_bucket = ctx.features and ctx.features(task)
+  local cond = policy.cond_cost and feat_bucket and policy.cond_cost[feat_bucket]
   local cost = {}
-  for _, name in ipairs(order) do cost[name] = policy.cost[name] or policy.default_cost end
+  for _, name in ipairs(order) do cost[name] = (cond and cond[name]) or policy.cost[name] or policy.default_cost end
 
   local bank, seen = {}, {}
   local function bucket(ty, c)

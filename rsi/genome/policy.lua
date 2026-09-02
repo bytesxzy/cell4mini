@@ -12,4 +12,5 @@ return {
   coerce_ic = false,        -- let small non-negative ints feed colour slots and colours feed int slots
   consts = { I = { 0, 1, 2, 3 }, C = { 0, 1, 2, 3, 4, 5 } },
   cost = {},                -- per-op cost overrides, learned by prior fitting
+  cond_cost = {},           -- task-feature bucket -> {op -> cost}, learned task-conditioned priors
 }

@@ -78,7 +78,7 @@ function render(s,p,lines){
   $('chart').innerHTML=svg;
   $('lineage').innerHTML=lines.slice().reverse().slice(0,40).map(l=>'<tr><td>'+l.gen+'</td><td>'+esc(l.operator)+'</td><td>'+esc(l.change)+'</td><td class="'+(l.heldout_delta>0?'ok':l.heldout_delta<0?'bad':'')+'">'+(l.heldout_delta>=0?'+':'')+(100*l.heldout_delta).toFixed(1)+'pp</td><td>'+(l.p_value!=null?l.p_value.toFixed(3):'')+'</td><td>'+(l.adversarial_delta!=null?((l.adversarial_delta>=0?'+':'')+(100*l.adversarial_delta).toFixed(1)+'pp'):'')+'</td><td>'+esc(l.regression||'')+'</td><td class="'+(l.accepted?'ok':'bad')+'">'+(l.accepted?'ACCEPT':'reject')+': '+esc(l.reason)+'</td></tr>').join('');
   $('research').innerHTML=(s.research.papers||[]).map(r=>'<div><small>'+esc((r.published||'').slice(0,10))+'</small> '+esc(r.title)+(r.signals&&r.signals.length?' <small class="acc">['+esc(r.signals.join(', '))+']</small>':'')+'</div>').join('')||'<small>no papers fetched yet (needs outbound HTTPS from the server)</small>';
-  $('lib').innerHTML=(c.library||[]).map(e=>'<div><b class="acc">'+esc(e.name)+'</b> = '+esc(e.expr)+' <small>'+esc(e.arg)+'→'+esc(e.ret)+' &middot; '+esc(e.origin||'')+'</small></div>').join('')||'<small>empty: nothing learned yet</small>';
+  $('lib').innerHTML=(c.library||[]).map(e=>'<div><b class="acc">'+esc(e.name)+'</b> = '+esc(e.expr)+' <small>'+esc(e.arg)+(e.arg2?','+esc(e.arg2):'')+'→'+esc(e.ret)+' &middot; '+esc(e.origin||'')+'</small></div>').join('')||'<small>empty: nothing learned yet</small>';
 }
 load();setInterval(load,4000);
 </script></body></html>

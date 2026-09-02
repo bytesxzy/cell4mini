@@ -16,6 +16,8 @@ function M.load(root)
     s = {
       secret_salt = now_salt(), heldout_epoch = 1, pressure = {}, burned = {}, variants = {},
       regression = {}, rotations = {}, created = os.time(),
+      -- the installation's latent world: which motifs recur across every split
+      world_salt = now_salt(), motif_epoch = 1,
     }
     os.execute("mkdir -p '" .. root .. "/state'")
     json.write(path, s)
@@ -48,6 +50,7 @@ end
 
 function M.build_splits(s, cfg, gen)
   local splits = { train = {}, heldout = {}, adversarial = {}, regression = {} }
+  tasks.set_world(s.world_salt, s.motif_epoch)
   local fams = active_families(s)
   for _, f in ipairs(fams) do
     for _, t in ipairs(tasks.generate_set(f, "train:" .. gen, cfg.train_per_family)) do splits.train[#splits.train + 1] = t end
@@ -58,10 +61,14 @@ function M.build_splits(s, cfg, gen)
       for _, t in ipairs(tasks.generate_set(f, s.secret_salt .. ":adv:" .. gen, cfg.adversarial_per_family)) do splits.adversarial[#splits.adversarial + 1] = t end
     end
   end
+  -- regression tasks regenerate under the motif epoch they were first solved in, so a later
+  -- rotation of the world cannot silently change what the suite is testing
   for _, spec in ipairs(s.regression) do
+    tasks.set_world(s.world_salt, spec.motif_epoch or 1)
     local t = tasks.generate(spec.family, spec.salt, spec.index)
     if t then splits.regression[#splits.regression + 1] = t end
   end
+  tasks.set_world(s.world_salt, s.motif_epoch)
   return splits
 end
 
@@ -77,7 +84,8 @@ function M.extend_regression(s, cfg, heldout_tasks, results)
       local index = tonumber(t.id:match("#(%d+)$"))
       local key = t.family .. "|" .. salt .. "|" .. index
       if not have[key] then
-        s.regression[#s.regression + 1] = { family = t.family, salt = salt, index = index, gen = results.gen }
+        s.regression[#s.regression + 1] = { family = t.family, salt = salt, index = index, gen = results.gen,
+          motif_epoch = s.motif_epoch }
         have[key] = true
         added = added + 1
       end
@@ -129,12 +137,16 @@ function M.after_accept(s, cfg, driver, gen)
     s.pressure[driver] = 0
     s.heldout_epoch = s.heldout_epoch + 1
     s.secret_salt = now_salt()
+    -- new motifs enter the world, so the abstractions that earned the last acceptances stop being
+    -- sufficient; already-solved regression tasks keep their own epoch and stay enforceable
+    s.motif_epoch = s.motif_epoch + 1
     local variant = spawn_variant(s, driver)
     s.burned[driver] = (s.burned[driver] or 0) + 1
     if s.burned[driver] >= 2 then s.burned[driver] = true else s.burned[driver] = nil end
-    local msg = string.format("benchmark rotation at gen %d: '%s' drove %d consecutive acceptances -> new secret held-out epoch %d, spawned variant %s",
-      gen, driver, cfg.pressure_limit, s.heldout_epoch, tostring(variant))
-    s.rotations[#s.rotations + 1] = { gen = gen, driver = driver, epoch = s.heldout_epoch, variant = variant }
+    local msg = string.format("benchmark rotation at gen %d: '%s' drove %d consecutive acceptances -> secret held-out epoch %d, motif epoch %d, spawned variant %s",
+      gen, driver, cfg.pressure_limit, s.heldout_epoch, s.motif_epoch, tostring(variant))
+    s.rotations[#s.rotations + 1] = { gen = gen, driver = driver, epoch = s.heldout_epoch,
+      motif_epoch = s.motif_epoch, variant = variant }
     -- the regression suite keeps its own salts, so old solved tasks remain enforceable
     return msg
   end

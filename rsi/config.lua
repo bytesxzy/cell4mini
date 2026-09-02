@@ -20,7 +20,7 @@ return {
   adversarial_tolerance = -0.03, -- candidate may not lose more than this on the adversarial split
   overfit_gap = 0.10,           -- train gain minus held-out gain above this (with no held-out gain) = overfit
   efficiency_ratio = 0.80,      -- accept equal-score candidates only if they use <= 80% of the nodes
-  candidates_per_gen = 3,
+  candidates_per_gen = 4,
   -- benchmark management
   pressure_limit = 2,           -- same family drives 2 consecutive acceptances -> rotate secret split + spawn variant
   -- research cadence (seconds)

@@ -6,7 +6,7 @@ local genome = require("rsi.kernel.genome")
 local M = {}
 
 M.operators = {
-  "library_learn", "near_miss_abstraction", "fit_priors", "reorder_ops", "prune_dsl_bulk",
+  "library_learn", "parameterized_abstraction", "near_miss_abstraction", "fit_priors", "fit_conditional_priors", "reorder_ops", "prune_dsl_bulk",
   "perturb_hyper", "const_tune", "prune_library", "drop_op", "restore_op", "strategy_swap",
 }
 
@@ -114,6 +114,89 @@ function ops_impl.library_learn(g, ctx)
   return "library learning: " .. table.concat(added, "; ")
 end
 
+-- Anti-unification: find subtrees that are identical except for one integer/colour constant and
+-- turn the differing position into a second parameter. This is where reuse actually lives: exact
+-- subtree repeats are rare in generated tasks, but "same shape, different constant" is common.
+-- (Version-space / Stitch-style abstraction, restricted to a single hole for tractability.)
+local function templates_of(node)
+  -- returns list of {tmpl=node with one constant replaced by @, value=v, ty=ty}
+  local out = {}
+  local function rebuild(n, target, replaced)
+    if n == target then return program.var2(), true end
+    if n.var or n.var2 or n.const ~= nil then return n, replaced end
+    local args, done = {}, replaced
+    for i, a in ipairs(n.args) do
+      local r, d = rebuild(a, target, done)
+      args[i] = r
+      done = done or d
+    end
+    return program.node(n.op, args), done
+  end
+  local consts = {}
+  local function collect(n)
+    if n.const ~= nil then consts[#consts + 1] = n return end
+    if n.op then for _, a in ipairs(n.args) do collect(a) end end
+  end
+  collect(node)
+  for _, c in ipairs(consts) do
+    local t, ok = rebuild(node, c, false)
+    if ok then out[#out + 1] = { tmpl = t, value = c.const, ty = c.ty or "I" } end
+  end
+  return out
+end
+
+function ops_impl.parameterized_abstraction(g, ctx)
+  local progs = solved_programs(ctx)
+  if #progs < 20 then return nil end
+  local groups = {}
+  for _, p in ipairs(progs) do
+    local local_seen = {}
+    for _, st in ipairs(program.subtrees(p.node)) do
+      if program.size(st) >= 3 and #program.ops_used(st) >= 2 then
+        for _, t in ipairs(templates_of(st)) do
+          local key = program.to_string(t.tmpl)
+          -- a single-op template is just an alias of an existing primitive: pure enumeration cost
+          if #program.ops_used(t.tmpl) >= 2 and not local_seen[key] and not lib_has(g, key) then
+            local_seen[key] = true
+            local grp = groups[key]
+            if not grp then grp = { node = t.tmpl, ty = t.ty, values = {}, uses = 0, size = program.size(t.tmpl) } groups[key] = grp end
+            grp.uses = grp.uses + 1
+            grp.values[t.value] = true
+          end
+        end
+      end
+    end
+  end
+  local list = {}
+  for key, grp in pairs(groups) do
+    local distinct = 0
+    for _ in pairs(grp.values) do distinct = distinct + 1 end
+    -- require the hole to actually vary, otherwise a plain (unary) abstraction already covers it
+    if distinct >= 2 and grp.uses >= 3 then
+      list[#list + 1] = { expr = key, node = grp.node, uses = grp.uses, distinct = distinct, ty = grp.ty,
+        gain = (grp.size - 1) * (grp.uses - 1) + distinct }
+    end
+  end
+  if #list == 0 then return nil end
+  table.sort(list, function(a, b) if a.gain ~= b.gain then return a.gain > b.gain end return a.expr < b.expr end)
+  local walk = in_type_of()
+  local added = {}
+  for _, c in ipairs(list) do
+    if #added >= 2 then break end
+    local arg = walk(c.node, ctx.prims, nil)
+    local ret = program.ret_type(c.node, ctx.prims, arg)
+    if arg and ret and ret ~= "?" then
+      local name = next_lib_name(g)
+      g.lib[#g.lib + 1] = { name = name, expr = c.expr, arg = arg, arg2 = c.ty, ret = ret,
+        origin = "anti_unification", uses = c.uses }
+      g.policy.cost[name] = g.policy.default_cost or 2
+      added[#added + 1] = string.format("%s(%s,%s)=%s [%d uses, %d distinct]", name, arg, c.ty, c.expr, c.uses, c.distinct)
+    end
+  end
+  if #added == 0 then return nil end
+  return "parameterized abstraction: " .. table.concat(added, "; ")
+end
+
 function ops_impl.near_miss_abstraction(g, ctx)
   local progs = {}
   for _, e in ipairs(ctx.near_corpus or {}) do
@@ -151,22 +234,65 @@ function ops_impl.fit_priors(g, ctx)
   local d = g.policy.default_cost or 2
   local changed = 0
   for i, name in ipairs(sorted) do
-    local target
-    if i <= top and (cnt[name] or 0) > 0 then target = 1
-    elseif (cnt[name] or 0) == 0 then target = math.min(3, d + 1)
-    else target = d end
-    local cur = g.policy.cost[name] or d
-    local new = cur + (target > cur and 1 or (target < cur and -1 or 0))
-    if new ~= cur then changed = changed + 1 end
-    g.policy.cost[name] = new
+    -- evidence so far: raising costs of rarely-used ops hurts the adversarial (hidden-op) split,
+    -- so this operator only ever lowers costs of frequently used ops.
+    if i <= top and (cnt[name] or 0) > 0 then
+      local cur = g.policy.cost[name] or d
+      if cur > 1 then g.policy.cost[name] = cur - 1 changed = changed + 1 end
+    end
   end
   if changed == 0 then return nil end
-  return string.format("fit priors from %d solutions: %d op costs moved one step", #progs, changed)
+  return string.format("fit priors from %d solutions: %d frequent ops made cheaper", #progs, changed)
+end
+
+-- Task-conditioned priors: per feature bucket (see kernel/features.lua), ops that solve tasks in that
+-- bucket get cheaper and ops never seen in that bucket get one step dearer. The search applies the
+-- bucket's table when it recognises the task's features.
+function ops_impl.fit_conditional_priors(g, ctx)
+  if not ctx.corpus or #ctx.corpus < 40 then return nil end
+  local by_bucket = {}
+  for _, e in ipairs(ctx.corpus) do
+    if e.bucket then
+      local ok, node = pcall(program.parse, e.expr)
+      if ok then
+        by_bucket[e.bucket] = by_bucket[e.bucket] or {}
+        table.insert(by_bucket[e.bucket], { node = node })
+      end
+    end
+  end
+  local names = {}
+  for _, name in ipairs(g.base.ops) do names[#names + 1] = name end
+  for _, e in ipairs(g.lib) do names[#names + 1] = e.name end
+  local d = g.policy.default_cost or 2
+  g.policy.cond_cost = g.policy.cond_cost or {}
+  local fitted = {}
+  for bucket, progs in pairs(by_bucket) do
+    if #progs >= 15 then
+      local cnt = op_counts(progs)
+      local sorted = {}
+      for _, name in ipairs(names) do sorted[#sorted + 1] = name end
+      table.sort(sorted, function(a, b) local ca, cb = cnt[a] or 0, cnt[b] or 0 if ca ~= cb then return ca > cb end return a < b end)
+      local top = math.max(4, math.floor(#sorted * 0.25))
+      local tbl = {}
+      for i, name in ipairs(sorted) do
+        local base = g.policy.cost[name] or d
+        if i <= top and (cnt[name] or 0) > 0 then tbl[name] = 1
+        elseif (cnt[name] or 0) == 0 then tbl[name] = math.min(3, base + 1)
+        else tbl[name] = base end
+      end
+      g.policy.cond_cost[bucket] = tbl
+      fitted[#fitted + 1] = bucket .. "(" .. #progs .. ")"
+    end
+  end
+  if #fitted == 0 then return nil end
+  table.sort(fitted)
+  return "fitted task-conditioned priors for " .. table.concat(fitted, " ")
 end
 
 function ops_impl.prune_dsl_bulk(g, ctx)
   local progs = solved_programs(ctx)
-  if #progs < 60 then return nil end
+  -- "unused" is only evidence once the corpus is large; on a small sample it just means unlucky
+  if #progs < 250 then return nil end
   local cnt = op_counts(progs)
   local keep, dropped = {}, {}
   for _, name in ipairs(g.base.ops) do
@@ -271,6 +397,7 @@ end
 
 function ops_impl.drop_op(g, ctx)
   local progs = solved_programs(ctx)
+  if #progs < 120 then return nil end
   local cnt = op_counts(progs)
   local unused = {}
   for i, name in ipairs(g.base.ops) do if not cnt[name] then unused[#unused + 1] = i end end
@@ -315,8 +442,9 @@ function M.choose_operator(meta, rng, exclude)
   return weights[#weights][1]
 end
 
-function M.make_candidate(champion, ctx, meta)
+function M.make_candidate(champion, ctx, meta, used)
   local exclude = {}
+  for op in pairs(used or {}) do exclude[op] = true end
   for _ = 1, #M.operators do
     local op = M.choose_operator(meta, ctx.rng, exclude)
     if not op then break end

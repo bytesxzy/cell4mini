@@ -29,7 +29,8 @@ function M.load(dir)
     local ok, err = pcall(function()
       local node = program.parse(e.expr)
       local f = program.compile(node, prims)
-      prims[e.name] = { f = f, t = { e.arg }, r = e.ret, learned = true, expr = e.expr, name = e.name }
+      local types = e.arg2 and { e.arg, e.arg2 } or { e.arg }
+      prims[e.name] = { f = f, t = types, r = e.ret, learned = true, expr = e.expr, name = e.name }
       order[#order + 1] = e.name
       lib_ok[#lib_ok + 1] = e
     end)

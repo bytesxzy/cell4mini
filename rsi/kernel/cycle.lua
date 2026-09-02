@@ -12,6 +12,7 @@ local benchmarks = require("rsi.kernel.benchmarks")
 local lineage = require("rsi.kernel.lineage")
 local research = require("rsi.kernel.research")
 local dashboard = require("rsi.kernel.dashboard")
+local features = require("rsi.kernel.features")
 local M = {}
 
 local ROOT = cfg.root
@@ -111,7 +112,7 @@ end
 
 local function champion_summary(g, r, bench, external_n)
   local lib = {}
-  for _, e in ipairs(g.lib) do lib[#lib + 1] = { name = e.name, expr = e.expr, arg = e.arg, ret = e.ret, origin = e.origin } end
+  for _, e in ipairs(g.lib) do lib[#lib + 1] = { name = e.name, expr = e.expr, arg = e.arg, arg2 = e.arg2, ret = e.ret, origin = e.origin } end
   return {
     fingerprint = genome.fingerprint(g), heldout = summarize(r.heldout), adversarial = summarize(r.adversarial),
     regression = { solved = r.regression.solved, n = r.regression.n },
@@ -197,12 +198,13 @@ function M.step(opts)
   state.near_corpus = state.near_corpus or {}
   local have = {}
   for _, e in ipairs(state.corpus) do have[e.expr] = true end
-  for _, r in ipairs(champ_r.train.per_task) do
+  for i, r in ipairs(champ_r.train.per_task) do
+    local bucket = features.bucket(splits.train[i])
     if r.solved == 1 and r.program and not have[r.program] then
-      state.corpus[#state.corpus + 1] = { expr = r.program, family = r.family, gen = gen }
+      state.corpus[#state.corpus + 1] = { expr = r.program, family = r.family, gen = gen, bucket = bucket }
       have[r.program] = true
     elseif r.solved == 0 and r.partial >= 0.66 and r.partial_program then
-      state.near_corpus[#state.near_corpus + 1] = { expr = r.partial_program, family = r.family, gen = gen }
+      state.near_corpus[#state.near_corpus + 1] = { expr = r.partial_program, family = r.family, gen = gen, bucket = bucket }
     end
   end
   while #state.corpus > 3000 do table.remove(state.corpus, 1) end
@@ -212,9 +214,11 @@ function M.step(opts)
   local ctx = { rng = rng, prims = champ_g.prims, train_results = champ_r.train, adversarial_results = champ_r.adversarial,
     corpus = state.corpus, near_corpus = state.near_corpus }
   local best = nil
+  local used = {}
   for k = 1, cfg.candidates_per_gen do
-    local cand_g, op, desc = mutate.make_candidate(champ_g, ctx, state.meta)
+    local cand_g, op, desc = mutate.make_candidate(champ_g, ctx, state.meta, used)
     if not cand_g then log(state, "no applicable mutation operator") break end
+    used[op] = true
     state.meta.tried[op] = (state.meta.tried[op] or 0) + 1
     state.candidates_total = state.candidates_total + 1
     local tag = string.format("c%d_%s", k, op)
