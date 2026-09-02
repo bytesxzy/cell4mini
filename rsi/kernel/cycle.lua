@@ -296,8 +296,13 @@ function M.run_generation(opts)
       regression = ev.regression, external = cand_r.external and (cand_r.external.solved .. "/" .. cand_r.external.n) or nil,
       time = os.time(),
     }
-    json.write(dir .. "/evidence.json", { entry = entry, heldout = cand_r.heldout, adversarial = cand_r.adversarial, train = cand_r.train })
-    lineage.record(ROOT, entry)
+    -- bookkeeping must never take down a generation: the verdict is already decided
+    pcall(function()
+      os.execute("mkdir -p '" .. dir .. "'")
+      json.write(dir .. "/evidence.json", { entry = entry, heldout = cand_r.heldout,
+        adversarial = cand_r.adversarial, train = cand_r.train })
+    end)
+    pcall(lineage.record, ROOT, entry)
     log(state, string.format("  candidate %d [%s] %s -> %s: %s", k, op, desc, accepted and "ACCEPT" or "reject", reason))
     if accepted and (not best or (cand_r.heldout.solve_rate > best.r.heldout.solve_rate)) then
       best = { g = cand_g, loaded = loaded, r = cand_r, op = op, desc = desc, dir = dir, entry = entry }
