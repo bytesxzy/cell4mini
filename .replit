@@ -1,0 +1,15 @@
+run = "lua run.lua loop 20"
+entrypoint = "run.lua"
+modules = ["lua-5.4"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+LUA_PATH = "./?.lua;./?/init.lua;;"
+
+# The console is static: state.json, progress.json and lineage.jsonl are written by the loop and
+# polled by rsi/www/index.html. Serve that directory to watch the run.
+[[ports]]
+localPort = 8080
+externalPort = 80
