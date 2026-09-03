@@ -49,7 +49,7 @@ do
   -- ==== rsi/config.lua ====
   package.preload['rsi.config'] = function(...)
 -- Kernel configuration (stable). Budgets are in solver nodes (deterministic), with hard instruction/time caps.
-return {
+local CONFIG = {
   root = "rsi",
   -- evaluation splits: tasks per family
   train_per_family = 10,       -- visible split: mutation operators may learn from its solutions
@@ -96,6 +96,48 @@ return {
     'all:"library learning" OR all:"anti-unification"',
   },
 }
+
+-- THROTTLE. Shared hosting (Namecheap and friends) sells web serving, not compute, and enforces
+-- that with CPU/entry-process limits and a fair-use clause. These four knobs are the ones that
+-- decide how much CPU a single invocation spends; they can be lowered from the environment so a
+-- constrained host can be respected without editing this file, and so one machine's throttle is not
+-- baked into the genome that another machine inherits.
+--
+-- Deliberately NOT overridable: heldout_per_family, alpha, bootstrap_reps, adversarial_tolerance,
+-- overfit_gap. Those set the evidential bar. Lowering them would not make the system cheaper, it
+-- would make it wrong -- it would start accepting changes the evidence does not support.
+--
+--   CELL4_CANDIDATES=1        candidates evaluated per generation (default 4). The cheapest real
+--                             lever: 1 candidate is roughly a third of the work of 4 and improves
+--                             more slowly, but every acceptance is decided by the same rule.
+--   CELL4_SECONDS=2           per-task solver wall-clock budget (default 3)
+--   CELL4_NODES=2000          per-task solver node budget (default 3000)
+--   CELL4_EXTERNAL_CAP=20     ARC tasks evaluated per generation (default 60)
+--
+-- Changing seconds/nodes changes what "solved" means, so the champion's cached scores are keyed on
+-- these values (rsi/kernel/cycle.lua) and a changed budget forces a full re-evaluation rather than
+-- comparing a candidate against a champion measured under a different budget.
+local function env_num(name, default, lo, hi)
+  local v = tonumber(os.getenv(name) or "")
+  if not v then return default end
+  if lo and v < lo then v = lo end
+  if hi and v > hi then v = hi end
+  return v
+end
+
+return (function(c)
+  c.candidates_per_gen = env_num("CELL4_CANDIDATES", c.candidates_per_gen, 1, 16)
+  c.seconds            = env_num("CELL4_SECONDS", c.seconds, 0.25, 120)
+  c.nodes              = env_num("CELL4_NODES", c.nodes, 100, 1000000)
+  c.external_cap       = env_num("CELL4_EXTERNAL_CAP", c.external_cap, 0, 10000)
+  c.external_seconds   = env_num("CELL4_EXTERNAL_SECONDS", c.external_seconds, 0.25, 120)
+  c.external_nodes     = env_num("CELL4_EXTERNAL_NODES", c.external_nodes, 100, 1000000)
+  -- A one-line fingerprint of the budgets this process ran under. Recorded in state and used as part
+  -- of the champion cache key, so a throttled run never silently reuses an unthrottled measurement.
+  c.budget_profile = string.format("n%d/s%s/xn%d/xs%s", c.nodes, tostring(c.seconds),
+    c.external_nodes, tostring(c.external_seconds))
+  return c
+end)(CONFIG)
   end
 
   -- ==== rsi/kernel/json.lua ====
@@ -4132,15 +4174,21 @@ function M.run_generation(opts)
   local champ_fp = genome.fingerprint(champ_g)
   local champ_r
   local cache = state.champion_cache
+  -- The budget profile is part of the key. "Solved" means "solved within this node and wall-clock
+  -- budget", so a champion measured at 3s/3000 nodes is not comparable with a candidate measured at
+  -- 2s/2000, and reusing the cached score across a budget change would corrupt the acceptance
+  -- decision rather than merely slow it down. A changed budget forces a full re-evaluation.
   if cache and cache.fingerprint == champ_fp and cache.epoch == bench.heldout_epoch and cache.regression_n == #splits.regression
-    and cache.external_n == #external and cache.heldout_n == #splits.heldout then
+    and cache.external_n == #external and cache.heldout_n == #splits.heldout
+    and cache.budget == cfg.budget_profile then
     champ_r = { heldout = cache.heldout, regression = cache.regression, external = cache.external }
     champ_r.train = eval_split(champ_g, splits.train, "champion: visible split")
     champ_r.adversarial = eval_split(champ_g, splits.adversarial, "champion: adversarial")
   else
     champ_r = eval_all(champ_g, splits, external, "champion", { candidate = "champion" })
     state.champion_cache = { fingerprint = champ_fp, epoch = bench.heldout_epoch, regression_n = #splits.regression,
-      external_n = #external, heldout_n = #splits.heldout, heldout = champ_r.heldout, regression = champ_r.regression, external = champ_r.external }
+      external_n = #external, heldout_n = #splits.heldout, budget = cfg.budget_profile,
+      heldout = champ_r.heldout, regression = champ_r.regression, external = champ_r.external }
   end
   log(state, string.format("gen %d champion %s: held-out %d/%d, visible %d/%d, adversarial %d/%d, regression %d/%d, ARC %d/%d",
     gen, champ_fp, champ_r.heldout.solved, champ_r.heldout.n, champ_r.train.solved, champ_r.train.n,
@@ -4345,6 +4393,15 @@ function M.run_generation(opts)
   if pruned > 0 then log(state, string.format("  pruned %d rejected candidate snapshots older than generation %d", pruned, gen - 50)) end
 
   out.heldout = champ_r.heldout.solve_rate
+  -- Which budgets this generation actually ran under. Two generations at different budgets are not
+  -- directly comparable, and without this the ledger gives no way to notice that.
+  out.budget = cfg.budget_profile
+  state.budget_profile = cfg.budget_profile
+  if state.last_budget_profile and state.last_budget_profile ~= cfg.budget_profile then
+    log(state, string.format("  budget profile changed: %s -> %s (champion re-measured, earlier generations are not directly comparable)",
+      state.last_budget_profile, cfg.budget_profile))
+  end
+  state.last_budget_profile = cfg.budget_profile
   benchmarks.save(bench)
   save_state(state)
   write_dashboard(state, bench, champ_g, champ_r, external)
@@ -6532,6 +6589,9 @@ local function write_live(r)
     -- back out of the state.json that was just committed rather than from anything still in memory.
     -- `narrated_gen` says which generation they belong to, so a generation whose narration failed
     -- cannot pass off the previous one's lines as its own.
+    -- The solver budgets this generation ran under. Two generations at different budgets are not
+    -- directly comparable, so the public page should not present them as if they were.
+    budget = state.budget_profile,
     narrated_gen = state.narration and state.narration.gen or nil,
     lines = state.narration and state.narration.lines or nil,
     recent = state.narration_log,

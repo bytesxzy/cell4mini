@@ -7,3 +7,6 @@ cron.log
 # A lock is per-machine, per-run state and must never be committed: a checked-in
 # lock directory would make every fresh clone refuse to run.
 rsi/state/.lock/
+
+# Host credentials for publish.sh. Never commit these.
+cell4.env

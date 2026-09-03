@@ -115,6 +115,34 @@ This build targets LuaJIT 2.1 and also runs unmodified on PUC Lua 5.1, 5.3 and
   instruction budget stops being enforceable and only the solver's own node and
   wall-clock caps remain.
 
+## Throttling it
+
+Four environment variables lower how much CPU one invocation spends, without
+editing this file:
+
+    CELL4_CANDIDATES=1        candidates evaluated per generation (default 4)
+    CELL4_SECONDS=1           per-task solver wall clock (default 3)
+    CELL4_NODES=800           per-task solver node budget (default 3000)
+    CELL4_EXTERNAL_CAP=20     ARC tasks per generation (default 60)
+
+Measured, one generation on one core: defaults ~117s, `CANDIDATES=1 SECONDS=2
+NODES=2000` ~76s, `CANDIDATES=1 SECONDS=1 NODES=800` ~10s.
+
+`alpha`, `bootstrap_reps`, the held-out split size and the adversarial tolerance
+are deliberately **not** settable this way. Those set the evidential bar;
+lowering them would not make the system cheaper, it would make it start
+accepting changes the evidence does not support.
+
+Changing `SECONDS` or `NODES` changes what "solved" means, so the budget profile
+is part of the champion's cache key: a changed budget forces a full
+re-measurement rather than comparing a candidate against a champion scored under
+a different budget. The profile is logged, stored in `state.json` and published
+in `live.json` as `budget`, because two generations at different budgets are not
+directly comparable.
+
+See `NAMECHEAP.md` for shared-hosting deployment and the policy questions it
+raises.
+
 ## Self-improvement
 
 Each generation loads the current genome, generates candidates with one of
