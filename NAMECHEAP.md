@@ -72,31 +72,32 @@ lineage snapshots and the corpus have no business being web-readable.
     # upload cell4.lua and run-once.sh here (cPanel File Manager or SFTP)
     chmod +x run-once.sh
 
-**Point the wrapper at the interpreter you actually found.** `run-once.sh` ends
-with `exec luajit cell4.lua step`; change `luajit` to the path from Section 1 if
-it differs.
+**Configure the wrapper.** Edit `run-once.sh` and set four things:
 
-**Set the throttle.** Add these above the `exec` line in `run-once.sh`:
+    CELL4_LUA=/path/to/luajit        # from Section 1; cron has a minimal PATH
+    CELL4_TIMEOUT=300                # wall-clock ceiling, MUST be below the cron interval
+
+and uncomment the throttle block:
 
     export CELL4_CANDIDATES=1        # one candidate per generation
     export CELL4_SECONDS=1           # per-task solver wall clock
     export CELL4_NODES=800           # per-task solver node budget
     export CELL4_EXTERNAL_CAP=20     # ARC tasks per generation
 
-These lower how much work one invocation does. They do **not** touch the
+The throttle lowers how much work one invocation does. It does **not** touch the
 acceptance rule — `alpha`, `bootstrap_reps`, the held-out split size and the
 adversarial tolerance are deliberately not settable from the environment,
 because lowering those would not make the system cheaper, it would make it start
 accepting changes the evidence does not support.
 
-**Cap it from the outside as well.** Belt and braces, in `run-once.sh`:
-
-    exec nice -n 19 timeout 300 luajit cell4.lua step
-
-`nice -n 19` means you yield the core to anything else on the box. `timeout 300`
-means no invocation of yours can ever be the long-running process that trips a
-limit; if it is killed it leaves a lock, which the next run clears after an hour
-of silence, or `luajit cell4.lua unlock` clears immediately.
+`CELL4_TIMEOUT` makes the wrapper run under `nice -n 19 timeout N`, so the job
+yields the core and can never be the long-running process that trips a limit. It
+must be lower than the cron interval. When `timeout` does stop a run, the
+interpreter dies holding the lock, so the wrapper checks for exit code 124 —
+which means that and only that — and clears the lock, because otherwise every
+run for the next hour would refuse. Leave `CELL4_TIMEOUT=0` and there is no
+ceiling: the lock alone serialises things, and a long generation simply makes the
+next scheduled run exit immediately instead of piling up.
 
 **First run by hand, and watch it.**
 
@@ -105,18 +106,29 @@ of silence, or `luajit cell4.lua unlock` clears immediately.
 It should print one `generation N done:` line and exit. Then check `status`.
 
 **Schedule it.** cPanel → Advanced → Cron Jobs. Check Namecheap's current
-documented minimum interval first, then pick something far above it. Every 30
-minutes is plenty — this system improves over days, not minutes, and a faster
-cron mostly buys you lock contention:
+documented minimum interval first; if it is longer than what you set, it wins.
+For every six minutes, cPanel's "Common Settings" dropdown has no such preset —
+fill the five fields in yourself:
 
-    */30 * * * * /home/USER/cell4/run-once.sh >> /home/USER/cell4/cron.log 2>&1
+    Minute */6   Hour *   Day *   Month *   Weekday *
 
-At ~10 s of CPU every 30 minutes that is about a 0.6% duty cycle on one core.
-Start there. If cPanel's resource usage page shows you anywhere near your CPU or
-entry-process limits, lengthen the interval before you do anything else.
+    Command: /home/USER/cell4/run-once.sh >> /home/USER/cell4/cron.log 2>&1
 
-Set the cron email field to your address so failures reach you, and rotate
-`cron.log` occasionally — it grows forever otherwise.
+At ~13 s of CPU every 6 minutes that is roughly a 3.6% duty cycle on one core.
+Six minutes is not more productive than thirty in any deep sense — this system
+improves over days — but the lock makes a short interval harmless: if a
+generation is still running, the next invocation fails the lock and exits in
+milliseconds, costing nothing. If cPanel's resource-usage page shows you
+anywhere near your CPU or entry-process limits, lengthen the interval before you
+change anything else.
+
+The `>> ... 2>&1` redirect is not optional: cPanel emails you the output of every
+cron run that produces any, and at six minutes that is 240 emails a day. The
+redirect gives cron nothing to send. Leave the "Email" field blank as well.
+
+That log grows forever, so add a second cron to truncate it weekly:
+
+    0 4 * * 0  : > /home/USER/cell4/cron.log
 
 **Publish the output.** Symlink or copy just the derived files into the web root:
 
