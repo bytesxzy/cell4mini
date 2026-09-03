@@ -1,0 +1,9 @@
+# NOTE: rsi/ is deliberately NOT ignored. It is the system's memory -- the
+# generation counter, the benchmarks, the learned genome, the corpus. Ignoring
+# it would make every clone start over at generation 1.
+*.log
+cron.log
+
+# A lock is per-machine, per-run state and must never be committed: a checked-in
+# lock directory would make every fresh clone refuse to run.
+rsi/state/.lock/

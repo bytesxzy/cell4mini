@@ -1,0 +1,24 @@
+# CELL4 on Replit.
+#
+# One click of Run = ONE generation, then the process exits. That is the whole
+# architecture: state lives in rsi/ on disk, and the next run continues from it.
+# There is no server, no daemon and no always-on loop here, deliberately.
+#
+# To run it on a schedule, use Deployments -> Scheduled Deployment with the
+# command below. Do NOT use a Reserved VM / Always On deployment: this program
+# has nothing to keep alive, and `cell4.lua loop` refuses to run for that reason.
+
+run = "luajit cell4.lua step"
+entrypoint = "cell4.lua"
+hidden = [".config", "rsi/versions"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["luajit", "cell4.lua", "step"]
+
+[env]
+# Keep the JIT out of the solver sandbox so the instruction budget is really
+# enforced. See the LUAJIT note in rsi/kernel/sandbox.lua before changing this.
+CELL4_JIT_SOLVER = "0"

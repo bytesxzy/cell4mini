@@ -340,6 +340,24 @@ local M = {}
 
 local BUDGET_ERR = "SANDBOX_BUDGET"
 
+-- LUAJIT. A `count` debug hook is only called from the interpreter: LuaJIT does not check hooks
+-- inside a compiled trace, so on LuaJIT a plain debug.sethook budget is silently NOT a budget. This
+-- is not theoretical -- `while true do x = x + 1 end` under this sandbox runs forever on LuaJIT and
+-- aborts in 0.01s on PUC Lua. The budget is the last line of defence behind the solver's own node
+-- and wall-clock caps, and a cap that quietly stops existing is worse than no cap, so on LuaJIT the
+-- sandboxed function is marked non-compilable (recursively) for the duration. Everything outside the
+-- sandbox -- task generation, evaluation, statistics, JSON, serialisation, the narrator -- still
+-- gets the JIT, and LuaJIT's interpreter is itself considerably faster than PUC Lua's.
+--
+-- Set CELL4_JIT_SOLVER=1 to keep the JIT on inside the sandbox. That is a deliberate trade: it is
+-- faster, and the instruction budget stops being enforceable, leaving only the solver's own
+-- `nodes >= budget` and `clock() > deadline` checks (rsi/genome/search.lua, which no mutation
+-- operator rewrites) between a bug in the search and a process that never returns.
+local jit_off, jit_on
+if type(rawget(_G, "jit")) == "table" and jit.off and os.getenv("CELL4_JIT_SOLVER") ~= "1" then
+  jit_off, jit_on = jit.off, jit.on
+end
+
 -- Run fn(...) with at most `instructions` VM instructions. Returns ok, result_or_error, exhausted.
 function M.run(instructions, fn, ...)
   local step = 1000
@@ -352,9 +370,11 @@ function M.run(instructions, fn, ...)
       error(BUDGET_ERR, 0)
     end
   end
+  if jit_off then jit_off(fn, true) end
   debug.sethook(hook, "", step)
   local res = { pcall(fn, ...) }
   debug.sethook()
+  if jit_on then jit_on(fn, true) end
   local ok = res[1]
   if not ok then return false, res[2], exhausted end
   return true, res[2], false
