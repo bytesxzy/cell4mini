@@ -169,7 +169,8 @@ FTP would put the password on the wire in clear text on every run.
 
 | symptom | cause | fix |
 | --- | --- | --- |
-| every run prints "another generation is already running" | a previous run was killed and left its lock | `luajit cell4.lua unlock` (it refuses while the lock still looks live; `unlock force` overrides) |
+| `run-once.sh: line N: $'\r': command not found` | the file was uploaded with Windows (CRLF) line endings | `sed -i 's/\r$//' run-once.sh publish.sh` — **only the shell scripts**. `cell4.lua` is unaffected: Lua treats CR as whitespace, and `selftest` passes on a CRLF copy under both LuaJIT and 5.1 |
+| "the lock ... is held" | read the second line of the message: it says whether something is running or a previous run was killed, and which command to use | `luajit cell4.lua unlock` (it refuses while the lock still looks live; `unlock force` overrides) |
 | every run says "refusing to run: persisted state exists at ..." | cron started somewhere other than the install directory | use `run-once.sh`, which does the `cd`; the message prints the exact command |
 | stuck at generation 1 forever | same as above, on an older build | as above |
 | `research: ... (9 fetch errors)` | the host blocks outbound HTTPS, or `curl` is missing | harmless — generations continue without new papers or ARC tasks. Fix by allowing outbound HTTPS, or download ARC task JSON into `rsi/data/arc/` yourself |

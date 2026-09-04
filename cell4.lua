@@ -4042,7 +4042,11 @@ touch_lock = function()
   if os.time() - last_stamp >= 10 then write_lock_stamp() end
 end
 
+local refusal = nil   -- why the last acquire_lock() said no: "held" | "unstamped"
+local refusal_age = nil
+
 local function acquire_lock()
+  refusal, refusal_age = nil, nil
   if sh_ok(os.execute("mkdir '" .. LOCK .. "' 2>/dev/null")) then write_lock_stamp() return true end
   local f = io.open(LOCK .. "/pid", "r")
   local age = nil
@@ -4057,17 +4061,41 @@ local function acquire_lock()
     -- future run forever. This cannot steal a live lock: a live holder rewrites the stamp within
     -- seconds of acquiring it, so a missing stamp means nobody is running.
     write_lock_stamp()
+    refusal = "unstamped"
     return false
   end
   if age > LOCK_STALE then
     os.execute("rm -rf '" .. LOCK .. "'")
     if sh_ok(os.execute("mkdir '" .. LOCK .. "' 2>/dev/null")) then write_lock_stamp() return true end
+    refusal = "held"
     return false
   end
+  refusal, refusal_age = "held", age
   return false
 end
 
 local function release_lock() os.execute("rm -rf '" .. LOCK .. "'") end
+
+-- Explain a refusal. A message that says what is wrong without saying what to do about it sends the
+-- reader looking for a bug that is not there. Reads the reason acquire_lock recorded rather than
+-- re-reading the stamp, because acquire_lock's recovery path may have just written one.
+local function busy_message(what)
+  local when, hint
+  if refusal == "unstamped" then
+    when = "with no timestamp in it"
+    hint = "that means a run was killed before it could stamp the lock. It has just been dated, so it " ..
+           "will clear itself in an hour; to carry on now, run: cell4.lua unlock force"
+  elseif refusal_age and refusal_age < 120 then
+    when = string.format("last refreshed %ds ago", refusal_age)
+    hint = "a generation is almost certainly running right now. This is normal and not an error: the " ..
+           "scheduler simply tries again next time."
+  else
+    when = refusal_age and string.format("last refreshed %ds ago", refusal_age) or "state unknown"
+    hint = "nothing has refreshed it recently, so a previous run was probably killed (terminal closed " ..
+           "mid-generation, or a host process limit). If you are sure nothing is running: cell4.lua unlock"
+  end
+  return string.format("%s.\nThe lock at %s is held (%s).\n%s", what, LOCK, when, hint)
+end
 
 -- One process invocation runs this exactly once and then returns. Nothing below it schedules,
 -- sleeps, retries or re-enters: the next generation is a new process started by the scheduler.
@@ -4075,7 +4103,7 @@ function M.step(opts)
   opts = opts or {}
   ensure_dirs()
   if not acquire_lock() then
-    error("another generation is already running (" .. LOCK .. "); refusing to share state")
+    error(busy_message("refusing to start a generation while another one holds the state"), 0)
   end
   local ok_run, err = pcall(M.run_generation, opts)
   release_lock()
@@ -4093,7 +4121,7 @@ function M.force_research(opts)
   opts = opts or {}
   ensure_dirs()
   if not acquire_lock() then
-    error("a generation is already running (" .. LOCK .. "); refusing to write state concurrently")
+    error(busy_message("refusing to fetch research while a generation holds the state"), 0)
   end
   local ok_run, r = pcall(function()
     local state = load_state()
