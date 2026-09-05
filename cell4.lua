@@ -575,18 +575,72 @@ Cell4.PolicyFormat = PolicyFormat
 -- =========================================================================
 local Perception = {}
 
--- spec: ordered list of {key, min, max} describing how to normalize each
--- named raw signal into [0,1] for featureVector, in a fixed order.
-function Perception.normalize(rawSignals, spec)
+-- spec: an ordered list, where each entry is either
+--   raw:     {key = "threat", min = 0, max = 100}
+--   derived: {key = "threatRising", derive = function(features, previous) -> [0,1]}
+--
+-- Derived features exist because a single frame is not a sufficient state.
+-- "health 50 and falling" and "health 50 and rising" are the same raw vector
+-- but call for opposite actions, and no amount of training can recover a
+-- distinction the input representation cannot express. Derived entries are
+-- computed in spec order after the raw ones, so a derived feature may build
+-- on any feature declared before it.
+--
+-- `features` is the named table built so far this tick; `previous` is the
+-- previous tick's named table, or nil on the first tick of an episode.
+function Perception.normalize(rawSignals, spec, previous)
 	local named = {}
 	local featureVector = {}
+	local featureErrors = nil
+
 	for i, field in ipairs(spec) do
-		local raw = rawSignals[field.key] or 0
-		local norm = Utils.clamp((raw - field.min) / (field.max - field.min), 0, 1)
-		named[field.key] = norm
-		featureVector[i] = norm
+		local value
+		if field.derive then
+			local ok, derived = pcall(field.derive, named, previous)
+			if ok and type(derived) == "number" and derived == derived then
+				value = Utils.clamp(derived, 0, 1)
+			else
+				-- Consistent with rules and goals: a broken feature contributes
+				-- a neutral value rather than crashing the tick, but it is
+				-- recorded so it cannot fail silently.
+				value = 0
+				featureErrors = featureErrors or {}
+				featureErrors[field.key] = ok
+					and ("derive() returned " .. type(derived))
+					or ("derive() failed: " .. tostring(derived))
+			end
+		else
+			local raw = rawSignals[field.key] or 0
+			value = Utils.clamp((raw - field.min) / (field.max - field.min), 0, 1)
+		end
+		named[field.key] = value
+		featureVector[i] = value
 	end
-	return { named = named, featureVector = featureVector, raw = rawSignals, predicted = false }
+
+	return {
+		named = named,
+		featureVector = featureVector,
+		raw = rawSignals,
+		predicted = false,
+		featureErrors = featureErrors,
+	}
+end
+
+-- Rate-of-change of an existing feature, mapped so 0.5 means "unchanged",
+-- above means rising and below means falling. `scale` sets how large a
+-- per-tick change saturates the signal (scale = 1 means a full 0->1 swing
+-- in one tick reaches the extreme).
+--
+-- Returns 0.5 when there is no previous tick to compare against: at the
+-- start of an episode the honest answer is "no observed change," not an
+-- invented direction.
+function Perception.delta(key, scale)
+	scale = scale or 1
+	return function(features, previous)
+		if not previous or previous[key] == nil then return 0.5 end
+		local change = (features[key] or 0) - previous[key]
+		return Utils.clamp(0.5 + change * scale * 0.5, 0, 1)
+	end
 end
 
 function Perception.clone(state)
@@ -599,6 +653,7 @@ function Perception.clone(state)
 		featureVector = Utils.copyArray(state.featureVector),
 		raw = state.raw,
 		predicted = state.predicted,
+		featureErrors = state.featureErrors,
 	}
 end
 
@@ -615,6 +670,31 @@ function Perception.withValues(state, spec, values)
 			local clamped = Utils.clamp(v, 0, 1)
 			out.named[field.key] = clamped
 			out.featureVector[i] = clamped
+		end
+	end
+	return out
+end
+
+-- Recomputes every derived feature of a state from its current base
+-- features, treating `previous` as the tick it followed.
+--
+-- The planner needs this: an action's effects change base features, but a
+-- derived feature like "threat trend" would otherwise keep the value it had
+-- in the real world. A goal reading that stale trend while evaluating an
+-- imagined future is being fed a fact from a different timeline. Derived
+-- features are functions of base features by definition, so an imagined
+-- state has to recompute them to stay internally consistent.
+function Perception.recomputeDerived(state, spec, previous)
+	local out = Perception.clone(state)
+	for i, field in ipairs(spec) do
+		if field.derive then
+			local ok, derived = pcall(field.derive, out.named, previous)
+			local value = 0
+			if ok and type(derived) == "number" and derived == derived then
+				value = Utils.clamp(derived, 0, 1)
+			end
+			out.named[field.key] = value
+			out.featureVector[i] = value
 		end
 	end
 	return out
@@ -655,6 +735,15 @@ function Planner.new(config)
 	self.beamWidth = config.beamWidth or 4
 	self.discount = config.discount or 0.9 -- future utility is worth slightly less
 	self.costPenalty = config.costPenalty or 0.05 -- utility charged per unit of action cost
+
+	-- Only pay for derived-feature recomputation if the spec actually has any.
+	self.hasDerived = false
+	for _, field in ipairs(config.spec) do
+		if field.derive then
+			self.hasDerived = true
+			break
+		end
+	end
 	return self
 end
 
@@ -739,6 +828,12 @@ function Planner:plan(state, memory, scorer)
 				if applicable then
 					local ok, predicted = pcall(action.effects, node.state, self:_helpers(node.state))
 					if ok and type(predicted) == "table" and predicted.featureVector then
+						if self.hasDerived then
+							-- Keep imagined states self-consistent: the action
+							-- moved base features, so trends and composites
+							-- derived from them have to move too.
+							predicted = Perception.recomputeDerived(predicted, self.spec, node.state.named)
+						end
 						expanded = expanded + 1
 						local utility = scorer:scoreState(predicted, memory)
 						local step = discountAtDepth * (utility - self.costPenalty * action.cost)
@@ -1170,6 +1265,9 @@ function Pipeline:endEpisode(finalReward)
 	self.episode = self.episode + 1
 	self.memory:forget(LAST_ACTION_KEY)
 	self.memory:clearObservations()
+	-- Derived features compare against the previous tick, so this must go
+	-- too: a delta measured across a death is change that never happened.
+	self.previousNamed = nil
 	return closed
 end
 
@@ -1177,7 +1275,8 @@ end
 -- reward: the reward attributable to the PREVIOUS step's action, if any.
 function Pipeline:step(rawSignals, reward)
 	local t = self.now()
-	local observed = Perception.normalize(rawSignals, self.spec)
+	local observed = Perception.normalize(rawSignals, self.spec, self.previousNamed)
+	self.previousNamed = observed.named
 	-- Memory stores the raw observation; reasoning runs on the smoothed view.
 	self.memory:pushObservation(observed, t)
 	local state = self:_smooth(observed)
@@ -1262,6 +1361,7 @@ function Pipeline:step(rawSignals, reward)
 		trace = trace,
 		state = state, -- the smoothed view reasoning actually ran on
 		observed = observed, -- what perception literally saw this tick
+		featureErrors = observed.featureErrors, -- nil unless a derive() failed
 	}
 end
 
@@ -1272,7 +1372,13 @@ end
 function Pipeline:trainingContract()
 	local features = {}
 	for i, field in ipairs(self.spec) do
-		features[i] = { name = field.key, min = field.min, max = field.max }
+		if field.derive then
+			-- Derived features are produced already normalized, so their range
+			-- is [0,1] by construction rather than by a declared raw range.
+			features[i] = { name = field.key, min = 0, max = 1, derived = true }
+		else
+			features[i] = { name = field.key, min = field.min, max = field.max, derived = false }
+		end
 	end
 
 	local actions = self.reasoning:actionNames()
@@ -1449,6 +1555,11 @@ function Pipeline:explain(result)
 	end
 	if result.heldReason then
 		table.insert(lines, "  hysteresis: " .. result.heldReason)
+	end
+	if result.featureErrors then
+		for key, message in pairs(result.featureErrors) do
+			table.insert(lines, "  BROKEN FEATURE " .. key .. ": " .. message)
+		end
 	end
 	if result.plan then
 		table.insert(lines, "  plan: " .. table.concat(result.plan.sequence, " -> "))

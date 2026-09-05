@@ -180,6 +180,129 @@ assertNear(state.named.threat, 0.5, 1e-9, "withDelta does not mutate the source 
 assertEq(Cell4.Perception.withValues(state, spec, { threat = 9 }).named.threat, 1, "withValues clamps")
 
 -- =====================================================================
+-- Derived features: a single frame is not a sufficient state.
+-- =====================================================================
+local derivedSpec = {
+	{ key = "threat", min = 0, max = 100 },
+	{ key = "health", min = 0, max = 100 },
+	{ key = "threatTrend", derive = Cell4.Perception.delta("threat") },
+	-- A derived feature may build on earlier ones, derived ones included.
+	{ key = "danger", derive = function(f) return f.threat * (1 - f.health) end },
+}
+
+local first = Cell4.Perception.normalize({ threat = 50, health = 100 }, derivedSpec, nil)
+assertNear(first.named.threatTrend, 0.5, 1e-9, "with no previous tick, trend reads as unchanged")
+assertNear(first.named.danger, 0, 1e-9, "composite feature computes from earlier features")
+assertEq(#first.featureVector, 4, "derived features occupy their own vector slots")
+
+local rising = Cell4.Perception.normalize({ threat = 90, health = 100 }, derivedSpec, first.named)
+assertTrue(rising.named.threatTrend > 0.5, "a rising signal reads above 0.5")
+local falling = Cell4.Perception.normalize({ threat = 10, health = 100 }, derivedSpec, rising.named)
+assertTrue(falling.named.threatTrend < 0.5, "a falling signal reads below 0.5")
+local steadySignal = Cell4.Perception.normalize({ threat = 10, health = 100 }, derivedSpec, falling.named)
+assertNear(steadySignal.named.threatTrend, 0.5, 1e-9, "an unchanged signal reads as exactly 0.5")
+
+-- The whole point: identical raw readings, opposite trends.
+assertNear(rising.named.threat, 0.9, 1e-9, "same raw threat")
+local alsoNinety = Cell4.Perception.normalize({ threat = 90, health = 100 }, derivedSpec,
+	{ threat = 1.0, health = 1 })
+assertNear(alsoNinety.named.threat, 0.9, 1e-9, "same raw threat again")
+assertTrue(rising.named.threatTrend ~= alsoNinety.named.threatTrend,
+	"identical raw states are distinguishable once trend is a feature")
+
+-- delta scale controls how quickly the signal saturates.
+local coarse = Cell4.Perception.delta("threat", 0.1)
+assertNear(coarse({ threat = 1 }, { threat = 0 }), 0.55, 1e-9, "a small scale keeps deltas near neutral")
+local sharp = Cell4.Perception.delta("threat", 10)
+assertNear(sharp({ threat = 1 }, { threat = 0 }), 1, 1e-9, "a large scale saturates")
+
+-- A broken derive() must not take the tick down, and must not hide.
+local brokenSpec = {
+	{ key = "threat", min = 0, max = 100 },
+	{ key = "bad", derive = function() error("derive exploded") end },
+	{ key = "alsoBad", derive = function() return "not a number" end },
+}
+local brokenState = Cell4.Perception.normalize({ threat = 50 }, brokenSpec, nil)
+assertNear(brokenState.named.threat, 0.5, 1e-9, "a broken feature does not stop the others")
+assertEq(brokenState.named.bad, 0, "a failed derive contributes a neutral zero")
+assertEq(brokenState.named.alsoBad, 0, "a non-numeric derive contributes a neutral zero")
+assertTrue(brokenState.featureErrors ~= nil, "broken features are recorded")
+assertTrue(brokenState.featureErrors.bad:find("failed"), "an erroring derive explains itself")
+assertTrue(brokenState.featureErrors.alsoBad:find("returned string"), "a mistyped derive explains itself")
+assertEq(first.featureErrors, nil, "a healthy tick records no feature errors")
+
+-- End to end through the pipeline, including the episode boundary rule.
+local trendReasoning = Cell4.Reasoning.new()
+trendReasoning:registerRule("brace", 1, function(s) return s.named.threatTrend, "threat trend" end)
+trendReasoning:registerRule("relax", 1, function(s) return 1 - s.named.threatTrend, "inverse trend" end)
+local trendPipeline = Cell4.Pipeline.new({
+	perceptionSpec = derivedSpec, reasoning = trendReasoning, clock = fakeClock,
+})
+fakeTime = fakeTime + 1
+trendPipeline:step({ threat = 10, health = 100 })
+fakeTime = fakeTime + 1
+local climbing = trendPipeline:step({ threat = 90, health = 100 })
+assertEq(climbing.decision, "brace", "the pipeline reacts to a rising trend")
+assertTrue(climbing.state.named.threatTrend > 0.5, "the pipeline threads the previous tick through")
+
+-- A delta measured across a death is change that never happened.
+trendPipeline:endEpisode(0)
+fakeTime = fakeTime + 1
+local reincarnated = trendPipeline:step({ threat = 10, health = 100 })
+assertNear(reincarnated.state.named.threatTrend, 0.5, 1e-9,
+	"trend does not measure across an episode boundary")
+
+-- Derived features appear in the contract, flagged as such.
+local trendContract = trendPipeline:trainingContract()
+assertEq(#trendContract.features, 4, "the contract covers derived features too")
+assertEq(trendContract.features[3].name, "threatTrend", "derived features keep their vector position")
+assertEq(trendContract.features[3].derived, true, "derived features are flagged in the contract")
+assertEq(trendContract.features[3].max, 1, "derived features are already normalized")
+assertEq(trendContract.features[1].derived, false, "raw features are flagged as raw")
+
+-- The planner must keep imagined states self-consistent: an action that
+-- lowers threat has to make the trend read as falling in that imagined
+-- future, not keep the trend the real world happened to have.
+local trendPlanner = Cell4.Planner.new({ spec = derivedSpec, maxDepth = 1 })
+trendPlanner:registerAction({
+	name = "calm",
+	effects = function(s, h) return h.withDelta({ threat = -0.5 }) end,
+})
+trendPlanner:registerAction({
+	name = "provoke",
+	effects = function(s, h) return h.withDelta({ threat = 0.5 }) end,
+})
+local trendScorer = Cell4.Reasoning.new()
+-- This goal reads ONLY the derived trend, so it can only work if imagined
+-- states recompute it.
+trendScorer:registerGoal("wantsFallingThreat", 1, function(s) return 1 - s.named.threatTrend end)
+local risingState = Cell4.Perception.normalize({ threat = 90, health = 100 }, derivedSpec, first.named)
+assertTrue(risingState.named.threatTrend > 0.5, "the real state's trend is rising")
+local trendPlan = trendPlanner:plan(risingState, mem, trendScorer)
+assertEq(trendPlan.firstAction, "calm", "the planner sees the trend its own action would create")
+
+-- Directly: recomputeDerived rewrites derived features from the base ones.
+local imagined = Cell4.Perception.withDelta(risingState, derivedSpec, { threat = -0.5 })
+assertTrue(imagined.named.threatTrend > 0.5, "before recompute, the trend is stale")
+local consistent = Cell4.Perception.recomputeDerived(imagined, derivedSpec, risingState.named)
+assertTrue(consistent.named.threatTrend < 0.5, "after recompute, the trend reflects the imagined change")
+assertNear(consistent.named.danger, consistent.named.threat * (1 - consistent.named.health), 1e-9,
+	"composites are recomputed from the imagined base features")
+assertNear(consistent.featureVector[3], consistent.named.threatTrend, 1e-9,
+	"recompute keeps the vector in sync with the named table")
+assertNear(risingState.named.threatTrend, imagined.named.threatTrend, 1e-9,
+	"recompute does not mutate the state it was given")
+
+-- A broken feature surfaces in the human-readable trace.
+local brokenPipeline = Cell4.Pipeline.new({
+	perceptionSpec = brokenSpec, reasoning = trendReasoning, clock = fakeClock,
+})
+fakeTime = fakeTime + 1
+local brokenResult = brokenPipeline:step({ threat = 50 })
+assertTrue(brokenResult.featureErrors ~= nil, "the pipeline surfaces feature errors")
+assertTrue(brokenPipeline:explain(brokenResult):find("BROKEN FEATURE"), "explain() flags broken features")
+
+-- =====================================================================
 -- Reasoning: rules only
 -- =====================================================================
 local reasoning = Cell4.Reasoning.new()
@@ -875,7 +998,18 @@ soakReasoning:registerRule("patrol", 0.5, function(s)
 	return 0.4, "default activity"
 end)
 
-local soakPlanner = Cell4.Planner.new({ spec = spec, maxDepth = 3, beamWidth = 4 })
+-- The soak spec carries a derived trend, so the whole stack (smoothing,
+-- planning, policy, experience export) runs with derived features present.
+local soakSpec = {
+	{ key = "threat", min = 0, max = 100 },
+	{ key = "health", min = 0, max = 100 },
+	{ key = "threatTrend", derive = Cell4.Perception.delta("threat", 4) },
+}
+soakReasoning:registerRule("brace", 1, function(s)
+	return s.named.threatTrend * 0.6, ("trend %.2f"):format(s.named.threatTrend)
+end)
+
+local soakPlanner = Cell4.Planner.new({ spec = soakSpec, maxDepth = 3, beamWidth = 4 })
 soakPlanner:registerAction({
 	name = "flee",
 	preconditions = function(s) return s.named.threat > 0.1 end,
@@ -893,14 +1027,17 @@ soakPlanner:registerAction({
 })
 soakReasoning:attachPlanner(soakPlanner, 1)
 
-local soakPolicy = Cell4.NeuralNet.new({2, 3}, "tanh", "linear")
+-- 3 features in, 4 actions out (brace joined the repertoire).
+local soakPolicy = Cell4.NeuralNet.new({3, 4}, "tanh", "linear")
 soakPolicy:loadWeights({
-	layers = { { weights = { {0.4, -0.2}, {-0.3, 0.6}, {0.1, 0.1} }, biases = {0, 0, 0} } },
+	layers = { { weights = {
+		{0.4, -0.2, 0.1}, {-0.3, 0.6, 0.0}, {0.1, 0.1, 0.2}, {0.0, 0.1, 0.5},
+	}, biases = {0, 0, 0, 0} } },
 })
-soakReasoning:attachPolicy(soakPolicy, { "flee", "heal", "patrol" }, 0.5)
+soakReasoning:attachPolicy(soakPolicy, { "brace", "flee", "heal", "patrol" }, 0.5)
 
 local soak = Cell4.Pipeline.new({
-	perceptionSpec = spec,
+	perceptionSpec = soakSpec,
 	reasoning = soakReasoning,
 	clock = fakeClock,
 	smoothing = { threat = 3, health = 2 },
@@ -956,14 +1093,14 @@ local soakExport = soak:exportExperience()
 assertEq(#soakExport.records, 64, "soak fills the experience buffer to capacity")
 for i, record in ipairs(soakExport.records) do
 	assertTrue(record.actionIndex ~= nil, "soak record " .. i .. " has a contract action index")
-	assertEq(#record.features, 2, "soak record " .. i .. " has a full feature vector")
+	assertEq(#record.features, 3, "soak record " .. i .. " has a full feature vector")
 	assertTrue(type(record.reward) == "number", "soak record " .. i .. " has a numeric reward")
 	-- Terminal and non-terminal records must be internally consistent: a
 	-- terminal record has no next state, a non-terminal one always does.
 	if record.done then
 		assertEq(record.nextFeatures, nil, "soak terminal record " .. i .. " has no next state")
 	else
-		assertEq(#record.nextFeatures, 2, "soak record " .. i .. " has a full next-state vector")
+		assertEq(#record.nextFeatures, 3, "soak record " .. i .. " has a full next-state vector")
 	end
 	if i > 1 then
 		local previous = soakExport.records[i - 1]
@@ -975,7 +1112,8 @@ for i, record in ipairs(soakExport.records) do
 		end
 	end
 end
-assertEq(#soakExport.contract.actions, 3, "soak contract lists exactly the real actions")
-assertEq(soakExport.contract.policy.layerSizes[2], 3, "soak contract matches the attached policy")
+assertEq(#soakExport.contract.actions, 4, "soak contract lists exactly the real actions")
+assertEq(soakExport.contract.policy.layerSizes[2], 4, "soak contract matches the attached policy")
+assertEq(soakExport.contract.features[3].derived, true, "soak contract flags the derived feature")
 
 print(("ALL SMOKE TESTS PASSED (%d checks)"):format(checks))

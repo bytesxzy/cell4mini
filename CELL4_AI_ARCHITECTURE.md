@@ -80,14 +80,26 @@ Single file, eight internal modules (Lua tables), in dependency order:
    deliberately not JSON (no library, no host-specific API needed). Malformed
    input returns `(nil, reason)` rather than raising — a bad model file is an
    expected condition. `tools/export_policy.py` is the trainer-side half.
-5. **Perception** — `normalize(raw, spec)` produces
-   `{named, featureVector, raw, predicted}`: a name-keyed table for rule
-   authors and a fixed-order vector for the network, from one declarative
-   spec. `clone`/`withValues`/`withDelta` derive new states while keeping
-   `named` and `featureVector` in sync — if those drift apart, the rules and
-   the network are reasoning about different worlds. Derived states are
-   flagged `predicted = true`: **the difference between planning and
+5. **Perception** — `normalize(raw, spec, previous)` produces
+   `{named, featureVector, raw, predicted, featureErrors}`: a name-keyed
+   table for rule authors and a fixed-order vector for the network, from one
+   declarative spec. `clone`/`withValues`/`withDelta` derive new states while
+   keeping `named` and `featureVector` in sync — if those drift apart, the
+   rules and the network are reasoning about different worlds. Derived states
+   are flagged `predicted = true`: **the difference between planning and
    hallucinating is knowing which states you imagined.**
+
+   Spec entries are either raw (`{key, min, max}`) or **derived**
+   (`{key, derive = function(features, previous)}`), computed in spec order
+   so a derived feature can build on any declared before it. Derived features
+   exist because a single frame is not a sufficient state: "health 50 and
+   falling" and "health 50 and rising" are the same raw vector but call for
+   opposite actions, and **no amount of training recovers a distinction the
+   input representation cannot express.** `Perception.delta(key, scale)` is
+   the built-in trend feature (0.5 = unchanged). `recomputeDerived` keeps
+   imagined states self-consistent — the planner calls it after every action's
+   effects, so a goal reading a trend during lookahead sees the trend that
+   action would create rather than one left over from the real world.
 6. **Planner** — bounded beam search over registered actions
    (`preconditions` / `effects` / `cost`). Scores imagined states with the
    reasoner's *goals*, so lookahead and wanting share one definition of
@@ -180,9 +192,6 @@ treat it as a relative baseline rather than a number to quote.
 
 ## Plan for upcoming nights (a plan, not a promise — adjust as reality dictates)
 
-- **Night 5**: Richer perception — derived/composite features (ratios,
-  deltas, time-since-event) declared in the spec, since raw signals alone
-  are a weak input representation for a policy.
 - **Night 6**: Performance pass for a live loop (cut per-step allocation,
   optionally cache plan results across ticks when the state barely moved).
 - **Night 7**: Consolidation — re-read this log, fix any drift between what
@@ -344,3 +353,39 @@ implementation.
 
 Tests: 1368 → **1468 Lua assertions + 9 Python**, all passing. Dead-code
 audit clean.
+
+### Night 5 — 2026-09-05 (same session, continued while the user was away)
+
+**Derived features**, brought forward from the night-5 plan. This is a
+representational fix rather than a feature: the input vector previously had
+no history in it at all, so "health 50 and falling" and "health 50 and
+rising" were literally the same input. That is a ceiling on what any trained
+policy can learn, however good the training run is, and it was worth fixing
+before training starts rather than after.
+
+Spec entries may now be derived (`{key, derive = fn}`), computed in order so
+they can build on earlier features, with `Perception.delta(key, scale)` as
+the built-in trend. A `derive` that throws or returns a non-number yields a
+neutral 0 and is recorded in `state.featureErrors`, which `explain()` prints
+as `BROKEN FEATURE` — consistent with how broken rules and goals are handled
+everywhere else: contained, but never silent.
+
+Two consistency rules fall out of this and are both tested:
+- **Episode boundaries clear the previous tick.** A delta measured across a
+  death is change that never happened, exactly like the bridged transition
+  fixed on night 3.
+- **The planner recomputes derived features on imagined states**
+  (`Perception.recomputeDerived`). Without it, an action's effects move the
+  base features while a trend keeps the value it had in the real world, so a
+  goal evaluating that imagined future reads a fact from a different
+  timeline. Pinned by a test where the only goal reads the derived trend: the
+  planner picks the action that *creates* a falling trend, which is only
+  possible if imagined states recompute.
+
+Derived features are flagged in `trainingContract()` (`derived = true`,
+range [0,1] by construction) so the trainer knows which inputs are computed
+rather than sensed. The integration soak now runs a derived trend through
+the whole stack — smoothing, planning, policy voting and experience export.
+
+Tests: 1468 → **1504 Lua assertions + 9 Python**, all passing. Dead-code
+audit clean. Throughput unchanged at ~9,900 steps/sec.
