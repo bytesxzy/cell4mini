@@ -1,0 +1,8 @@
+# CELL4 runtime state and data live on the training servers, not in this repo.
+# Only code, harnesses and reports are versioned here.
+cell4/upstream/rsi/data/
+cell4/upstream/rsi/state/
+cell4/upstream/rsi/versions/
+cell4/upstream/rsi/www/
+cell4/upstream/live.json
+cell4/upstream/cron.log
