@@ -40,3 +40,29 @@ Both need `luajit` (2.1) and a working copy of the server tree with `rsi/` popul
 
 Neither runs `cell4.lua step`, so neither advances a generation, does network research, or
 touches `rsi/state/`.
+
+## Reproducing the night-2 measurements
+
+The ARC corpus is not committed (`rsi/data/` is server state). To rebuild it from public sources:
+
+    git clone --depth 1 https://github.com/fchollet/ARC-AGI.git      v1
+    git clone --depth 1 https://github.com/arcprize/ARC-AGI-2.git    v2
+
+Copy each task to `rsi/data/arc/` named `arc1_<id>.json` (ARC-AGI-1) or `arc2_<id>.json`
+(ARC-AGI-2), keeping the original ARC JSON shape. Night 2 verified this reconstruction against
+night 1's forensics exactly: `arc1_1cf80156` lands at sorted position 31 and the solvable tasks
+at positions <= 50 are {31, 32, 36, 49}, both as recorded on the server.
+
+    lua bench/dump_dsl.lua                       # catalogue vs genome DSL; the adoption pool
+    lua bench/measure_design.lua <split> 2500 4  # score a split, decomposed by failure mode
+    lua bench/control_eval.lua 800 1             # unmodified solver, for use as a control
+    lua bench/diff_probe.lua                     # does a patched search agree with production?
+    lua bench/check_defects.lua                  # acceptance-rule arithmetic
+
+`bench/search_collect.lua` is a measurement-only variant of the search that exempts the target
+key from OE dedup so every train-consistent program is collected instead of only the first. It is
+not for production: with no early exit it consumes the whole node budget and starves the backward
+phase, so it needs a larger budget than production to see what production sees.
+
+Rule of thumb this repo now enforces: **every harness ships with a control.** Both nights so far
+have produced a plausible number that turned out to be an instrument reading.

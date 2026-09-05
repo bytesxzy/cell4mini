@@ -1,0 +1,1052 @@
+[
+ {
+  "task_id": "arc1_1b2d62fb",
+  "transformation": "Split the 5x7 grid at its 1-coloured middle column and paint an 8 in every position where both the left and right 3-wide halves are background.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "left_half/right_half each take floor(7/2)=3 columns from the ends, skipping the separator column, so they align. overlay(left_half($),right_half($)) is the cellwise OR; invert_mask turns that into 1 exactly where both halves were 0; recolor(...,1,8) finishes it. Colour 1 is in the global pool and 8 is mined as a literal (present in every output, absent from every input). Full program: recolor(invert_mask(overlay(left_half($),right_half($))),1,8) \u2014 7 nodes."
+ },
+ {
+  "task_id": "arc1_1b60fb0c",
+  "transformation": "Reflect the single shape across its own vertical axis and draw, in colour 2, only the cells the reflection adds.",
+  "expressible": "no",
+  "missing": "object-relative symmetry completion in a new colour",
+  "rationale": "The mirror axis is the shape's own axis, not the grid's: whole-grid flip_h of train1 puts cells at columns 1-3 while the answer only fills 1-2. Getting the shape's axis requires crop_bbox (which destroys the position needed to overlay the result back), and computing 'reflection minus original' needs the shape twice, which there is no binding to do. overlay/invert_mask cannot express set difference at an offset."
+ },
+ {
+  "task_id": "arc1_1bfc4729",
+  "transformation": "Replace the grid with a fixed 10x10 template (border frame plus full rows 0,2,7,9) whose top five rows take the colour of the upper dot and bottom five the colour of the lower dot.",
+  "expressible": "no",
+  "missing": "emit a fixed constant template grid recoloured from input",
+  "rationale": "The two colours are easy (most_nonzero_color of top_half/bottom_half), but the output geometry is a constant sprite with no relation to the input pixels. Building it needs 1xN and 2xN scaffolds assembled by repeated const_grid/vcat/hcat/add_border \u2014 technically finite (halving 10->5->2->1 reaches a 1x1 seed) but on the order of 30+ nodes, far outside any cost-ordered enumeration. There is no op that emits or recolours a learned template."
+ },
+ {
+  "task_id": "arc1_1c786137",
+  "transformation": "Return the interior of the rectangle outlined in a unique marker colour, discarding the surrounding noise.",
+  "expressible": "no",
+  "missing": "crop to the interior of a marker-coloured rectangle",
+  "rationale": "The background is not 0 (the grid is dense noise), so crop_bbox crops nothing. Selecting the frame requires 'the connected component whose colour is unique to it', then cropping to its interior \u2014 keep_largest/keep_smallest select by cell count, not by colour rarity or shape, and the frame is neither the largest nor smallest component. remove_border only strips the grid's own outermost ring."
+ },
+ {
+  "task_id": "arc1_1caeab9d",
+  "transformation": "Shift every coloured block vertically (columns unchanged) so all of them line up on the rows occupied by the colour-1 block.",
+  "expressible": "no",
+  "missing": "per-object translation to a common alignment",
+  "rationale": "Each object needs its own vertical offset, determined by its current row versus the anchor's row. shift_down applies one global offset to the whole grid, and gravity_* collapses everything to one edge rather than to an interior band. With no iteration and no per-object binding, distinct per-object shifts are out of reach."
+ },
+ {
+  "task_id": "arc1_1cf80156",
+  "transformation": "Crop the grid to the bounding box of the single coloured shape.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Exactly crop_bbox($). Verified on train1 (rows 2-5, cols 3-6 -> 0222/0020/2220/2020) and on the other pairs; background is 0 everywhere so the bbox is the shape's."
+ },
+ {
+  "task_id": "arc1_1e0a9b12",
+  "transformation": "Let every coloured cell fall to the bottom of its column, preserving vertical order.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Exactly gravity_down($). Checked column by column on train3 (col1's three 3s land on rows 2-4, col3's two 1s on rows 3-4) and it matches every pair including the test."
+ },
+ {
+  "task_id": "arc1_1e32b0e9",
+  "transformation": "The grid is a 3x3 array of 5x5 cells split by separator lines; each cell is completed up to the union of all cells' patterns, with the added cells drawn in the separator colour.",
+  "expressible": "no",
+  "missing": "per-subgrid combination across a separator-partitioned grid",
+  "rationale": "This needs the grid decomposed into nine subgrids, a reduction (union) across all of them, then that union stamped back into each subgrid as a difference in a new colour. Decomposition to arbitrary 5x5 tiles is not available (halves only), and the fold over nine subgrids is iteration with a body. No composition of the 105 ops does it."
+ },
+ {
+  "task_id": "arc1_1f0c79e5",
+  "transformation": "Take the 2x2 block whose odd cell marks a direction, and repeatedly translate the block in that direction to the grid edge, leaving a trail in the majority colour.",
+  "expressible": "no",
+  "missing": "repeated translation of an object along a marker-given direction",
+  "rationale": "Two structural blocks: reading a direction from the relative position of the odd-coloured cell (needs per-object geometry and a four-way branch, and if_int only branches ints), and then an unbounded repeat of shift_down/shift_right accumulated by overlay. Repetition of a variable number of steps is a loop; the DSL has none, and each shift would need the intermediate reused."
+ },
+ {
+  "task_id": "arc1_1f642eb9",
+  "transformation": "Each coloured marker on the grid border slides along its row or column until it reaches the solid square, replacing the square's edge cell with the marker colour (and the marker's original cell keeps or clears accordingly).",
+  "expressible": "no",
+  "missing": "per-marker projection onto a shape boundary",
+  "rationale": "Every marker needs its own translation distance, computed from the block's bounding box and the marker's own row/column. That is a per-object rule with per-object offsets; shift_* is global and gravity_* would move the block itself. Nothing composes to 'move each loose pixel until it hits the nearest shape'."
+ },
+ {
+  "task_id": "arc1_1f85a75f",
+  "transformation": "Crop to the one coherent multi-cell shape hidden among scattered single-pixel noise.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "components() is same-colour 4-connected, so the target shape is a single component of 12, 6 and 12 cells in the three grids while every noise component is at most 2-3 cells. crop_bbox(keep_largest($)) reproduces all trains and the test (train1 -> rows 10-14, cols 17-19 = 330/333/303/333/033)."
+ },
+ {
+  "task_id": "arc1_1f876c06",
+  "transformation": "Each colour appears exactly twice; draw the diagonal line joining its two occurrences.",
+  "expressible": "no",
+  "missing": "draw a line connecting two same-coloured endpoints",
+  "rationale": "Requires locating the two cells of each colour and rasterising a segment between them, repeated for every colour present. There is no coordinate extraction for a cell, no line-drawing op, and no way to loop over colours. Diagonal drawing is not reachable from shift/gravity/overlay."
+ },
+ {
+  "task_id": "arc1_1fad071e",
+  "transformation": "Count the 2x2 blocks of colour 1 in the noisy grid and emit a 1x5 row with that many 1s left-aligned.",
+  "expressible": "no",
+  "missing": "count objects matching a shape/size predicate",
+  "rationale": "recolor($,2,0) does isolate the 1s, but object_count then counts the stray single 1s as well; the answer needs only components of size 4. There is no filter-objects-by-size (keep_largest/keep_smallest pick one, and largest_object_size gives a size not a count). The unary-bar output itself would be constructible from a list, so the whole gap is the predicate-count."
+ },
+ {
+  "task_id": "arc1_2013d3e2",
+  "transformation": "Crop to the symmetric shape's bounding box and return its top-left quarter (3x3 of a 6x6 box).",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "crop_bbox gives a 6x6 box in every pair; left_half(top_half(crop_bbox($))) takes floor(6/2)=3 rows and columns. Verified on train1 (007/068/784), train2 (100/036/052) and the test (000/044/883)."
+ },
+ {
+  "task_id": "arc1_2204b7a8",
+  "transformation": "Recolour each stray dot to the colour of whichever of the two coloured border lines is nearer to it.",
+  "expressible": "no",
+  "missing": "recolour cells by the nearest coloured boundary",
+  "rationale": "Even for one orientation this needs per-half recolouring with a colour read from that half, and the border pair is vertical in train1 and the test but horizontal in trains 2-3. A single program would have to branch on orientation; if_int returns an int, so there is no grid-level conditional, and no op transposes conditionally."
+ },
+ {
+  "task_id": "arc1_22168020",
+  "transformation": "For each chevron-shaped object, fill the horizontal gap between its two arms in each row so the arms become solid bars.",
+  "expressible": "no",
+  "missing": "fill the horizontal span between an object's extreme cells per row",
+  "rationale": "This is a per-row, per-object span fill: in each row of each object, paint from its leftmost to its rightmost cell. gravity_left/right slide cells rather than filling between them, and there is no row-wise scan op producing a grid. Multiple objects with different colours in one grid rules out any global trick."
+ },
+ {
+  "task_id": "arc1_22233c11",
+  "transformation": "Two equal blocks lie on a diagonal; continue that diagonal by adding one more block of the same size beyond each end, drawn in colour 8.",
+  "expressible": "no",
+  "missing": "extrapolate an object sequence along its axis in a new colour",
+  "rationale": "Needs the step vector between the two blocks, then two translated copies of a block placed beyond the endpoints in a different colour. Computing an inter-object offset and placing a recoloured copy at that offset requires per-object geometry and reuse of the object as a value; shift_* moves the entire grid and overlay would need the shifted copy bound twice."
+ },
+ {
+  "task_id": "arc1_2281f1f4",
+  "transformation": "Mark with 2 every cell whose row carries a 5 in the last column and whose column carries a 5 in the top row, keeping the original markers.",
+  "expressible": "no",
+  "missing": "outer product of a row mask and a column mask into a grid",
+  "rationale": "The answer is the outer product of the top-row mask with the right-column mask. row() and col() give the two lists, but there is no op that expands a list into a grid other than from_row (one row) and no broadcast/product between a row list and a column list. zip_add works on equal-length lists, not on a cross product."
+ },
+ {
+  "task_id": "arc1_228f6490",
+  "transformation": "Each loose coloured shape is moved into the hole of the 5-coloured box whose cavity it exactly fits, and its original copy is erased.",
+  "expressible": "no",
+  "missing": "match loose shapes to holes and place them",
+  "rationale": "Requires enumerating loose objects, enumerating cavities, testing shape congruence between them, then translating each matched shape into its cavity. Every step is per-object with a search, plus a shape-equality predicate; none of that exists, and there is no iteration to drive it."
+ },
+ {
+  "task_id": "arc1_22eb0ac0",
+  "transformation": "Fill a row entirely with its colour whenever the leftmost and rightmost cells of that row are the same colour; leave other rows alone.",
+  "expressible": "no",
+  "missing": "per-row conditional fill when both endpoints match",
+  "rationale": "This is a conditional applied independently to each row. col($,0) and col($,w-1) give the two lists, but there is no elementwise equality producing a mask, no list-conditional, and no op that expands a per-row boolean back into a grid. if_int only chooses between two ints."
+ },
+ {
+  "task_id": "arc1_234bbc79",
+  "transformation": "Delete the 5-marked cells and close the resulting gaps, joining the coloured segments on either side into a narrower grid.",
+  "expressible": "no",
+  "missing": "delete marker cells and close the gap per row",
+  "rationale": "The output is narrower than the input by a data-dependent amount and each row's segments are re-joined around the removed markers, with colours propagating into the vacated cells. There is no column-deletion op, no data-dependent resize other than crop_bbox, and the per-row compaction differs row by row."
+ },
+ {
+  "task_id": "arc1_23581191",
+  "transformation": "Draw a full-length row and column through each of the two coloured dots in that dot's colour, and put a 2 where the two crosses intersect.",
+  "expressible": "no",
+  "missing": "draw a full row-and-column cross through a point",
+  "rationale": "Needs each dot's coordinates and a rasterised cross through it, twice, plus the intersection cells recoloured. There is no coordinate-of-a-cell extraction and no ray/cross drawing op; overlay of two crosses would also require binding each cross grid, which the single-variable chain cannot do."
+ },
+ {
+  "task_id": "arc1_239be575",
+  "transformation": "Output a single cell: 8 if a path of 8-coloured cells connects the two 2-coloured squares, 0 otherwise.",
+  "expressible": "no",
+  "missing": "connectivity/path test between two regions",
+  "rationale": "The answer depends on whether two specific regions are linked through a third colour. object_count over a colour-filtered grid does not decide it (in train2 the 8s form several components yet the answer is 8, because only the linking path matters). No reachability or region-adjacency predicate exists, and the 1x1 output would be easy once the boolean were available."
+ },
+ {
+  "task_id": "arc1_23b5c85d",
+  "transformation": "Return the smallest solid single-coloured rectangle in the grid, cropped to its own size.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "components() is same-colour 4-connected, so the nested/adjacent rectangles are separate objects despite touching. crop_bbox(keep_smallest($)) gives 3x3 of 8 (train1, 9 cells vs 30), 2x3 of 1 (train2, 6 cells), 3x2 of 6, 3x4 of 7, 2x2 of 4, and 3x3 of 6 on the test \u2014 all correct."
+ },
+ {
+  "task_id": "arc1_253bf280",
+  "transformation": "Join each pair of 8s that share a row or column with a line of 3s between them, leaving unpaired 8s alone.",
+  "expressible": "no",
+  "missing": "draw a line connecting two same-coloured endpoints",
+  "rationale": "Same structural gap as 1f876c06: locate pairs of identically coloured cells and rasterise the segment between them, repeated for every pair, while leaving lone markers untouched. No coordinate extraction, no line drawing, no iteration over pairs."
+ },
+ {
+  "task_id": "arc1_007bbfb7",
+  "transformation": "Output is a 9x9 grid: for every nonzero cell of the 3x3 input, a copy of the whole input is stamped into the corresponding 3x3 block, and zero cells give empty blocks.",
+  "expressible": "no",
+  "missing": "fractal self-stamp of grid into its own nonzero cells",
+  "rationale": "Requires 3x3 self-tiling masked by the input's own nonzero pattern. tile2x2 is the only self-tiling op and it is fixed 2x2 and unmasked; upscale(G,3) blows up cells rather than stamping copies. Selecting which of the 9 blocks receive a copy is a per-cell conditional over the input, which needs iteration/mapping that the single-variable call chain cannot express."
+ },
+ {
+  "task_id": "arc1_00d62c1b",
+  "transformation": "Every region of background enclosed by the green (3) shape is filled with colour 4; open background stays 0.",
+  "expressible": "no",
+  "missing": "flood fill enclosed region",
+  "rationale": "Interior-vs-exterior classification of background cells is a connectivity computation over the whole grid. The DSL's only connectivity-aware ops are keep_largest, keep_smallest, object_count and largest_object_size, all of which operate on nonzero objects and return a whole grid or an int \u2014 none can identify background components or test whether one touches the border. invert_mask + keep_largest would find the largest background blob, not the enclosed ones, and there is no way to subtract the outside component from the rest."
+ },
+ {
+  "task_id": "arc1_017c7c7b",
+  "transformation": "Recolour 1 to 2 and extend the 6-row grid to 9 rows by continuing its minimal vertical row period.",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "recolor handles the colour change, but the extension needs the minimal row period p (4 in train1, 2 in train2, 3 in train3 and test) to be inferred and then continued. There is no op that detects periodicity, and no fixed slice works: vcat($, top_half($)) or vcat($, rows 2-4) each match some examples and fail others. Cropping rows at a computed offset is also impossible \u2014 there is no row-range slice op, only top_half/bottom_half/left_half/right_half."
+ },
+ {
+  "task_id": "arc1_025d127b",
+  "transformation": "Each parallelogram-outline object is redrawn with its top edge shifted one cell right while its bottom edge stays anchored, so the whole outline shears.",
+  "expressible": "no",
+  "missing": "per-object outline shear",
+  "rationale": "Train1 contains two independent shapes, each sheared about its own bottom row, so a global shift_right cannot work. Even for a single shape the rule is geometric \u2014 the left and right diagonal edges are re-interpolated between the moved top bar and the fixed bottom bar, and the right edge clips at the object's own bbox. There is no op to segment objects, to identify an object's bottom row, or to apply a transform per object."
+ },
+ {
+  "task_id": "arc1_045e512c",
+  "transformation": "A 3x3 outline object is repeated across the grid in the direction indicated by an adjacent bar of a second colour, each copy recoloured to that marker's colour, until the grid edge.",
+  "expressible": "no",
+  "missing": "repeat object along a marker-indicated direction",
+  "rationale": "Requires reading a marker bar's orientation (horizontal bar means repeat vertically, vertical bar means repeat horizontally), and there may be two independent markers with different directions on the same source shape (train1, train3, test). Repetition count depends on the distance to the edge, so it is a variable-length loop; hcat/vcat only compose a fixed number of grids and cannot place recoloured copies at computed offsets inside a fixed-size canvas."
+ },
+ {
+  "task_id": "arc1_0520fde7",
+  "transformation": "Split the 3x7 grid at the central column of 5s and output the 3x3 cellwise AND of the two 1-masks, coloured 2.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Both 3x3 halves are reachable: left_half($) gives columns 0-2, and flip_h(left_half(flip_h($))) gives columns 4-6 regardless of how right_half rounds an odd width. Cellwise AND follows by De Morgan with the ops present: invert_mask(overlay(invert_mask(A), invert_mask(B))), then fill_nonzero(...,2) sets the output colour. About 9 nested calls, no iteration or rebinding needed \u2014 the only assumption is that invert_mask swaps zero and nonzero and overlay is nonzero-wins."
+ },
+ {
+  "task_id": "arc1_05269061",
+  "transformation": "The sparse diagonal fragments define a 3-colour cycle along the anti-diagonal; fill the whole 7x7 grid with out[r][c] = cycle[(r+c) mod 3].",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "Needs the diagonal period and its phase inferred from a few scattered cells, then propagated over every cell. The DSL has no diagonal indexing, no per-cell coordinate arithmetic, and nothing that fills empty cells from an inferred repeat. Grid ops are whole-grid rigid transforms plus overlay; no finite composition of flips, shifts and overlays reconstructs the phase-correct infinite diagonal tiling from the given fragments across all four examples."
+ },
+ {
+  "task_id": "arc1_05f2a901",
+  "transformation": "Translate the movable 2-coloured object until it is flush against the stationary 8-coloured block, leaving the block where it is.",
+  "expressible": "no",
+  "missing": "translate object until it touches another object",
+  "rationale": "The shift direction and magnitude differ per example (down in train1, right in train2, down in train3, left in test) and depend on the relative positions of the two objects. shift_down/shift_right take a constant or computed int but move the entire grid, including the 8-block that must stay fixed; the gravity_* ops move everything to a wall, not one object toward another. Isolating one object, translating only it, and recombining requires binding the two objects separately, which the single-variable chain cannot do."
+ },
+ {
+  "task_id": "arc1_06df4c85",
+  "transformation": "In a grid of cells separated by lines, every pair of cells sharing a colour is joined by filling all cells between them with that colour.",
+  "expressible": "no",
+  "missing": "connect same-coloured cells with a line",
+  "rationale": "Requires grouping the marked cells by colour, finding pairs in the same meta-row or meta-column, and painting the span between each pair \u2014 an unbounded number of independent paint operations whose colours and extents come from the data. Nothing in the DSL locates a coloured cell's coordinates or draws a segment; there is no per-pair or per-colour iteration."
+ },
+ {
+  "task_id": "arc1_08ed6ac7",
+  "transformation": "Recolour each vertical bar of 5s according to the rank of its height: tallest becomes 1, next 2, next 3, shortest 4.",
+  "expressible": "no",
+  "missing": "per-object recolour by size rank",
+  "rationale": "Four objects each get a different colour determined by their rank among all objects' sizes. The DSL offers keep_largest/keep_smallest (which discard rather than recolour) and largest_object_size (an int), but no way to enumerate objects, sort them, or apply a distinct recolour to each. recolor(G,C,C) is global by colour, and all four bars share the colour 5, so no chain of global recolours can separate them."
+ },
+ {
+  "task_id": "arc1_09629e4f",
+  "transformation": "The grid is split by 5-lines into a 3x3 arrangement of 3x3 blocks; find the block with the fewest nonzero cells and redraw the grid so each block is solid-filled with the corresponding colour of that key block.",
+  "expressible": "no",
+  "missing": "sub-block selection by predicate from a separator-partitioned grid",
+  "rationale": "Two impossible steps compose here. First, choosing the sparsest of nine blocks requires extracting each block and comparing nonzero counts \u2014 there is no block-indexing op (only half-splits) and no argmin over derived grids. Second, the output must upscale that 3x3 key by 3 while re-inserting the 5 separator rows and columns; upscale(G,3) alone produces a 9x9 with no separators and there is no way to interleave lines at computed positions."
+ },
+ {
+  "task_id": "arc1_0962bcdd",
+  "transformation": "Each small plus-shaped object is expanded in place into a fixed larger flower motif whose arms depend on the object's two colours.",
+  "expressible": "no",
+  "missing": "per-object motif stamping",
+  "rationale": "Two objects appear at different locations in every example and each must be replaced by a larger motif centred on its own position. That is a map over objects with a stamping body: the DSL cannot locate an object, cannot draw at a computed offset, and cannot repeat an operation once per object. Global ops such as overlay of shifted copies would smear the motif over the whole grid rather than around each centre."
+ },
+ {
+  "task_id": "arc1_0a938d79",
+  "transformation": "The two isolated coloured cells become full lines (rows or columns) and that two-line motif repeats across the whole grid with period equal to twice their separation.",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "Requires deriving the spacing between the two marker cells and then tiling an alternating stripe pattern to the grid edge \u2014 a variable number of repeats determined by the data. There is also no op that expands a single cell into a full row or column. Neither the stripe generation nor its unbounded repetition can be built from the fixed-arity grid combinators (hcat, vcat, overlay, tile2x2) without a loop."
+ },
+ {
+  "task_id": "arc1_0b148d64",
+  "transformation": "Of the four coloured blocks in the grid, output the one whose colour is the odd one out, cropped to its bounding box.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Three blocks share the majority colour and one has the minority colour, so crop_bbox(recolor($, most_nonzero_color($), 0)) works: erasing the most frequent nonzero colour leaves only the odd block, and crop_bbox trims to it. Verified against all three training pairs and the test pair (train1 gives rows 11-20 cols 0-9 = 10x10; train3 gives 9x6; test gives 6x6). Three nested calls, no iteration or rebinding."
+ },
+ {
+  "task_id": "arc1_0ca9ddb6",
+  "transformation": "Each isolated coloured cell is decorated by colour: 2-cells get 4s at their four diagonal neighbours, 1-cells get 7s at their four orthogonal neighbours, other colours are left bare.",
+  "expressible": "no",
+  "missing": "per-object motif stamping",
+  "rationale": "A per-cell rule whose motif is selected by that cell's colour, applied at every marker independently. The DSL has no way to iterate over marked cells, no way to branch on a cell's colour (if_int returns an int, not a grid), and no way to write at a coordinate. Whole-grid shift-and-overlay would decorate every nonzero cell identically, including the 6s and 8s that must stay bare."
+ },
+ {
+  "task_id": "arc1_0d3d703e",
+  "transformation": "Apply the fixed colour involution 1<->5, 2<->6, 3<->4, 8<->9 to every cell.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "recolor(G,C,C) is global by colour, and each transposition can be done with a spare colour as scratch: recolor a->7, recolor b->a, recolor 7->b. Colour 7 (and 0) never appears in any input here, so one scratch colour suffices, reused sequentially for all four swaps \u2014 twelve nested recolor calls, structurally within the DSL. Worth flagging that depth twelve with two colour literals per call is far outside any realistic enumeration budget, so it is expressible but almost certainly not findable."
+ },
+ {
+  "task_id": "arc1_0dfd9992",
+  "transformation": "Fill the zeroed-out holes in a doubly periodic wallpaper texture by continuing the grid's own horizontal and vertical periods.",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "Inpainting requires detecting the two periods (which differ per example) and copying each missing cell from its periodic counterpart, choosing a donor that is itself not a hole. The DSL has no periodicity detection and no masked copy; overlay of a shifted copy of the grid would need shift amounts equal to the inferred periods and would have to be applied repeatedly until every hole is covered, which is a loop with a data-dependent trip count."
+ },
+ {
+  "task_id": "arc1_0e206a2e",
+  "transformation": "Each multi-cell template object is deleted from its original spot and redrawn, rotated as needed, onto the scattered single cells whose colours and layout match it.",
+  "expressible": "no",
+  "missing": "object matching, rotation and placement",
+  "rationale": "This is multi-step spatial reasoning: segment objects, match each template against each scattered marker constellation up to rotation, then translate and rotate the template onto the match while erasing the source. Every one of those steps needs object-level addressing and per-object control flow. rot90/rot180/rot270 exist but only rotate the entire grid, and nothing can place a rotated fragment at a computed location."
+ },
+ {
+  "task_id": "arc1_10fcaaa3",
+  "transformation": "Tile the input 2x2, then place an 8 at all four diagonal neighbours (with wraparound) of every coloured cell.",
+  "expressible": "no",
+  "missing": "per-object motif stamping",
+  "rationale": "tile2x2 covers the first half exactly, but the second half stamps a fixed diagonal-cross motif around each coloured cell, with toroidal wraparound at the grid edges. There is no per-cell stamping op, no wraparound shift (shift_down/shift_right translate and truncate rather than rotate), and no way to write the 8s only at cells adjacent to markers without also touching the markers themselves."
+ },
+ {
+  "task_id": "arc1_11852cab",
+  "transformation": "Complete each shape so it is symmetric under horizontal and vertical reflection about its own centre, adding the missing mirrored cells.",
+  "expressible": "no",
+  "missing": "per-object symmetry completion",
+  "rationale": "The symmetry axes are the object's own centre, not the grid's: in train1 the shape is centred on row 3 / column 4 of a 10x10 grid, whose own mirror axes fall between rows and columns, so flip_h/flip_v/rot180 overlaid on the input reflect about the wrong lines. Correcting for this needs a translate-flip-translate-back around a computed centre, i.e. binding the object's bbox and reusing it, which the single-variable chain cannot do."
+ },
+ {
+  "task_id": "arc1_1190e5a7",
+  "transformation": "Count the bands the separator lines cut the grid into and output a solid grid of the background colour with that many rows and columns.",
+  "expressible": "no",
+  "missing": "solid grid of computed dimensions",
+  "rationale": "Both counts are computable \u2014 count(col($,0), sep)+1 rows and count(row($,0), sep)+1 columns, with sep as least_nonzero_color \u2014 but nothing can build an h-by-w solid grid from two ints. from_row makes only a 1-by-n grid, upscale of a 1x1 is square only (outputs here are 2x4, 3x2, 6x5, 5x3), and vcat/hcat compose a fixed number of operands, so a data-dependent number of stacked rows is out of reach. There is no reshape from a flat list either."
+ },
+ {
+  "task_id": "arc1_137eaa0f",
+  "transformation": "Overlay all the scattered fragments onto one 3x3 grid, aligning them by their shared 5-coloured anchor cell.",
+  "expressible": "no",
+  "missing": "object assembly aligned on a marker cell",
+  "rationale": "Three fragments at arbitrary positions must each be cropped around its 5 and superimposed with the 5s coincident. That needs locating each anchor, extracting a 3x3 window at a computed offset, and overlaying a variable number of such windows. The DSL has no coordinate extraction, no windowed crop (crop_bbox is global to all nonzero cells), and no way to fold overlay over an unbounded set of fragments."
+ },
+ {
+  "task_id": "arc1_150deff5",
+  "transformation": "Decompose the 5-coloured shape into 2x2 square tiles and 3-cell straight-line tiles, recolouring the squares 8 and the lines 2.",
+  "expressible": "no",
+  "missing": "shape decomposition into fixed-shape tiles",
+  "rationale": "This is an exact-cover / tiling search over each shape, then a recolour keyed to which tile type each cell landed in. The DSL has no local pattern matching, no way to test whether a 2x2 neighbourhood is filled, and no per-cell recolour driven by such a test. recolor is global by colour value and every cell of the shape starts as the same colour 5."
+ },
+ {
+  "task_id": "arc1_178fcbfb",
+  "transformation": "Replace each isolated coloured cell with a full line of that colour: 2s become vertical columns, 1s and 3s become horizontal rows.",
+  "expressible": "no",
+  "missing": "draw a full row or column through each marked cell",
+  "rationale": "Each marker independently paints an entire row or column, with the direction chosen by the marker's colour, and there are three to five markers per example. The DSL cannot locate a nonzero cell's row or column index, cannot fill a row or column at a computed index, and cannot branch a grid-valued result on colour \u2014 if_int is the only conditional and it returns an int."
+ },
+ {
+  "task_id": "arc1_1a07d186",
+  "transformation": "Move each stray cell so that it sits directly against the full-grid line of its own colour, and delete strays whose colour has no matching line.",
+  "expressible": "no",
+  "missing": "per-object translation to a matching object",
+  "rationale": "Every stray moves a different distance in a different direction, determined by matching its colour to one of several full lines, and unmatched strays vanish. That is a per-object lookup plus a per-object translation, with an object-level delete \u2014 three things the DSL cannot do. shift_right/shift_down move the whole grid uniformly, and there is no colour-keyed association between two parts of the grid."
+ },
+ {
+  "task_id": "arc1_25d487eb",
+  "transformation": "A triangular arrow contains one cell of a different colour at its base-centre; draw a ray in that marker colour from the arrow's apex outward, in the direction the arrow points, all the way to the grid edge.",
+  "expressible": "no",
+  "missing": "directional ray from a marked cell to the grid edge",
+  "rationale": "Requires (a) inferring the arrow's pointing direction from its shape, (b) locating the single odd-coloured cell, and (c) writing a line of cells from that column/row to the border. The DSL has no cell-locating op (no 'position of colour c'), no line/ray drawing, and no direction inference. gravity_* moves whole objects rather than extruding a ray, and shift_* needs a constant offset. Nothing composes to this."
+ },
+ {
+  "task_id": "arc1_25d8a9c8",
+  "transformation": "For each of the three rows of a 3x3 grid, output an all-5 row if that input row is a single uniform colour, otherwise an all-0 row.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Every example is exactly 3x3, so the three rows can be unrolled: for i in 0..2, from_row(repeat_list(singleton(if_int(eq(unique_count(row($,i)),1),5,0)), width($))) and vcat the three. Uses only row, unique_count, eq, if_int, singleton, repeat_list, from_row, width, vcat. It is a genuine composition (~12-15 nodes), so cost-ordered enumeration may not reach it, but it is expressible."
+ },
+ {
+  "task_id": "arc1_25ff71a9",
+  "transformation": "Translate the whole shape down by exactly one row.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "shift_down($,1) is a direct single-op solution; all five pairs are a pure one-row downward translation on a 3x3 grid with room to move."
+ },
+ {
+  "task_id": "arc1_264363fd",
+  "transformation": "Each large rectangle contains one odd-coloured marker cell; stamp the small template shape found elsewhere in the grid centred on each marker and extend its cross arms as full-length row and column stripes across that rectangle, deleting the original template.",
+  "expressible": "no",
+  "missing": "stamp a pattern at each marker cell location",
+  "rationale": "Needs iteration over multiple rectangles, per-rectangle marker location, copying a template grid found at a data-dependent place, and drawing stripes bounded by each rectangle. No lambdas, no per-object iteration, no positional stamping, no sub-grid extraction at computed coordinates. Structurally out of reach."
+ },
+ {
+  "task_id": "arc1_272f95fa",
+  "transformation": "Full-length 8-lines partition the grid into rectangular regions; the region enclosed on all four sides is filled with 6 and its four orthogonal neighbour regions are filled with 2 (above), 1 (below), 4 (left) and 3 (right).",
+  "expressible": "no",
+  "missing": "per-region rule over a line-partitioned grid",
+  "rationale": "Requires detecting the separator lines, enumerating the resulting regions, identifying which one is fully enclosed, and filling five different regions with five different colours. The DSL's only partition ops are the fixed top/bottom/left/right halves, and there is no way to write a fill back into a computed sub-rectangle of the original grid."
+ },
+ {
+  "task_id": "arc1_27a28665",
+  "transformation": "Emit a 1x1 grid whose value is a fixed label determined by which of four 3x3 shape classes the nonzero cells form (diagonal-pair shape->1, X->2, L-block->3, plus->6), independent of the shape's colour.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "The four shape classes are separable by an integer key computable in-DSL, e.g. combining count(col($,i),0) for i=0..2 as 9*z0+3*z1+z2 gives 14/16/22/20, distinct for all four classes; a nested if_int chain then maps key to label and from_row(singleton(...)) makes the 1x1 grid. (If object_count is 4-connected, the shorter key object_count($) -> 3/5/2/1 also works.) Expressible, but only as a hard-coded lookup that is deep and would not be found by cost-ordered search."
+ },
+ {
+  "task_id": "arc1_28bf18c6",
+  "transformation": "Crop to the shape's bounding box and place two copies of it side by side.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "hcat(crop_bbox($), crop_bbox($)). Referencing the input variable twice is allowed (no binding needed), and crop_bbox on a single-object grid yields exactly the 3x3 tile that is duplicated in every example."
+ },
+ {
+  "task_id": "arc1_28e73c20",
+  "transformation": "Ignore the (blank) input entirely and draw an inward rectangular spiral of 3s filling a grid of the same size.",
+  "expressible": "no",
+  "missing": "recursive/iterative construction of a spiral",
+  "rationale": "The output depends only on grid size but requires a construction whose depth grows with that size (each ring is a smaller spiral). With no loops, no recursion and no self-referential op, a fixed-depth composition cannot produce spirals of 6, 8, 10, 13, 15 and 18 rings-worth of nesting from one program."
+ },
+ {
+  "task_id": "arc1_29623171",
+  "transformation": "5-lines split the grid into a 3x3 array of 3x3 blocks; fill the block(s) containing the most coloured cells entirely with that colour and clear every other block.",
+  "expressible": "no",
+  "missing": "per-region rule over a line-partitioned grid",
+  "rationale": "Requires counting nonzero cells per block, taking an argmax across blocks (with ties, as in the test pair), and writing a solid fill back into the winning block's position. There is no per-region iteration, no argmax over a derived list of regions, and no way to paint into a computed sub-rectangle."
+ },
+ {
+  "task_id": "arc1_29c11459",
+  "transformation": "Each row containing two coloured endpoint cells is filled between them, the left half in the left endpoint's colour and the right half in the right endpoint's colour, with a single 5 at the midpoint.",
+  "expressible": "no",
+  "missing": "draw a connecting line between aligned marker cells",
+  "rationale": "Needs the column indices of the two endpoints (no op returns a cell's position), a fill between them split at the midpoint, and this repeated for a variable number of rows (the test has two). No line drawing, no positional queries, no per-row iteration."
+ },
+ {
+  "task_id": "arc1_29ec7d0e",
+  "transformation": "The grid is a periodic tiled pattern with rectangular patches erased to 0; restore the erased cells from the pattern's period.",
+  "expressible": "no",
+  "missing": "occlusion repair from grid self-symmetry",
+  "rationale": "Requires inferring the horizontal and vertical periods of the pattern and copying, per erased cell, the value from a congruent position. That is a per-cell conditional lookup at data-dependent offsets: no masked copy, no periodic-completion op, no way to overlay a shifted copy conditioned on 0s (shift_* would need the inferred period, and overlay cannot repair holes interior to a repeated block in one shot)."
+ },
+ {
+  "task_id": "arc1_2bcee788",
+  "transformation": "Recolour the marker-coloured cells to the main shape colour, reflect the resulting shape across the internal axis the marker line sits on, union the two copies, and repaint the background as 3.",
+  "expressible": "no",
+  "missing": "reflect a shape across a data-located internal axis",
+  "rationale": "flip_h/flip_v mirror the entire grid about its own centre; here the mirror axis is an internal line whose position (and orientation, vertical in trains 1/3, horizontal in train 2) is read off the marker cells. Realising it would require locating the axis column/row and shifting by a computed offset before and after the flip, and no op returns a colour's position."
+ },
+ {
+  "task_id": "arc1_2bee17df",
+  "transformation": "Fill with 3 every row and every column of the interior whose cells are all background 0.",
+  "expressible": "no",
+  "missing": "per-row/column predicate-driven fill",
+  "rationale": "Same shape of problem as 25d8a9c8 but grid sizes vary (12x12, 10x10, 14x14), so the rows and columns cannot be unrolled into a fixed vcat/hcat chain. The DSL has no way to map a per-row boolean back onto a grid of variable height, and no column-write op at all."
+ },
+ {
+  "task_id": "arc1_2c608aff",
+  "transformation": "Every isolated dot that shares a row band or column band with the solid rectangle is extended into a line of its own colour running from the dot to the rectangle's edge; unaligned dots are left alone.",
+  "expressible": "no",
+  "missing": "draw a connecting line between aligned marker cells",
+  "rationale": "Requires the rectangle's bounding box, an alignment test per dot, and a line drawn from each aligned dot to the rectangle. That is per-object iteration plus line drawing, neither of which exists; and there are a variable number of dots per grid."
+ },
+ {
+  "task_id": "arc1_2dc579da",
+  "transformation": "A full separator row and column divide the grid into four equal quadrants, three of which are identical; output the quadrant that differs.",
+  "expressible": "no",
+  "missing": "select the odd-one-out sub-grid among partitions",
+  "rationale": "The half ops can carve out quadrants (using flips to skip the odd separator line), but choosing which quadrant to return is a data-dependent choice among grids and the only conditional is if_int, which returns an int. overlay cannot merge them either, since the background is nonzero (8/4/3/1) so nothing is transparent."
+ },
+ {
+  "task_id": "arc1_2dd70a9a",
+  "transformation": "Trace an L-shaped path of 3s from the two-cell 3 marker, running in the direction it points and then turning, until it reaches the two-cell 2 marker on the other side of the grid.",
+  "expressible": "no",
+  "missing": "multi-segment path routing between markers",
+  "rationale": "Needs both markers' positions, their pointing directions, and a two-segment route with a turn at the intersection of the two axes. No positional queries, no line drawing, and certainly no routing. Well beyond a fixed-depth composition of these 105 ops."
+ },
+ {
+  "task_id": "arc1_2dee498d",
+  "transformation": "The input is the same block repeated three times horizontally; output a single copy of that block (the left third).",
+  "expressible": "no",
+  "missing": "arbitrary sub-rectangle crop with computed bounds",
+  "rationale": "The only cropping ops are crop_bbox (bbox of nonzero, useless here since the grid is fully coloured) and the fixed halves; there is no way to take a left third. Rebuilding it row by row via take(row($,i), div(width($),3)) would need a vcat chain of fixed length, but the row count varies across examples (2, 3, 4, 5), so no single program covers them."
+ },
+ {
+  "task_id": "arc1_31aa019c",
+  "transformation": "Find the single cell whose colour occurs exactly once in the grid, blank everything else, and surround that cell with a 3x3 halo of 2s.",
+  "expressible": "no",
+  "missing": "stamp a pattern at each marker cell location",
+  "rationale": "Requires locating the unique-coloured cell (no op returns a position or a per-colour frequency table beyond most/least colour) and then writing a fixed 3x3 pattern centred there on an otherwise blank grid. Nothing in the DSL can place content at a computed coordinate."
+ },
+ {
+  "task_id": "arc1_321b1fc6",
+  "transformation": "One multi-coloured template object and several plain 8-coloured objects of the same shape are present; repaint each 8-object with the template's colours and erase the original template.",
+  "expressible": "no",
+  "missing": "stamp a pattern at each marker cell location",
+  "rationale": "A per-object rule applied to a variable number of objects, using a template read from elsewhere in the grid and pasted at each object's position. No iteration over objects, no positional paste, no way to isolate one object and delete it while keeping the rest."
+ },
+ {
+  "task_id": "arc1_32597951",
+  "transformation": "Recolour to 3 every cell of value 1 that lies inside the bounding box of the 8-coloured shape, leaving the rest of the grid untouched.",
+  "expressible": "no",
+  "missing": "in-place edit restricted to a colour-selected sub-region",
+  "rationale": "recolor(G,1,3) exists but applies globally; the edit must be confined to the bbox of a particular colour. There is no colour-specific bbox op (crop_bbox works on all nonzero, and the 1-pattern covers the whole grid), and no way to crop, edit and paste a sub-rectangle back at its original offset."
+ },
+ {
+  "task_id": "arc1_3345333e",
+  "transformation": "Delete the solid rectangle of the intruding colour and restore the cells it covered using the underlying shape's mirror symmetry.",
+  "expressible": "no",
+  "missing": "occlusion repair from grid self-symmetry",
+  "rationale": "Needs the symmetry axis of the underlying figure and a per-cell copy from the mirrored position only where the occluder sat. Whole-grid flips do not help because the occluding rectangle would also be mirrored into the output, and there is no masked/conditional overlay to combine a grid with its own flip only at the damaged cells."
+ },
+ {
+  "task_id": "arc1_3428a4f5",
+  "transformation": "Split the grid at the 4-separator row into two 6x5 halves and output 3 where exactly one half has a coloured cell (cellwise XOR), 0 elsewhere.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Top = top_half($); Bottom = flip_v(top_half(flip_v($))) (avoids any ambiguity about where bottom_half splits an odd height). With overlay as OR-over-zero and invert_mask as a 0/1 negation, XOR = invert_mask(overlay(invert_mask(overlay(A,B)), invert_mask(overlay(invert_mask(A),invert_mask(B))))) by De Morgan, then recolor(...,1,3). Expressible with existing ops, though ~14 nodes deep."
+ },
+ {
+  "task_id": "arc1_3618c87e",
+  "transformation": "On a 5x5 grid, each 1 sitting on top of a 5-pillar drops through to the bottom row: rows 0-2 become empty, row 3 is unchanged, and row 4 keeps its 5s except where the old row 2 had a 1.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "All examples are 5x5, so this is row surgery: Z = const_grid(from_row(row($,0)),0); output = vcat(vcat(vcat(Z,Z),Z), vcat(from_row(row($,3)), overlay(from_row(row($,4)), from_row(row($,2))))). Only row, from_row, const_grid, overlay and vcat are needed. Expressible, though the size-specific unrolling is deep and brittle."
+ },
+ {
+  "task_id": "arc1_3631a71a",
+  "transformation": "The grid is symmetric under mirroring; the rectangular 9-coloured patches are occlusions and must be replaced by the values implied by that symmetry.",
+  "expressible": "no",
+  "missing": "occlusion repair from grid self-symmetry",
+  "rationale": "Same gap as 3345333e and 29ec7d0e: needs a per-cell conditional copy from the mirrored position only where colour 9 sits. A whole-grid flip_v/flip_h would also carry the 9-patches, and there is no masked overlay (overlay treats 0 as transparent, but the damaged cells are 9, not 0) to merge a grid with its own reflection selectively."
+ },
+ {
+  "task_id": "arc1_363442ee",
+  "transformation": "A 3x3 key block sits left of the 5-separator column; stamp a copy of that key into the 3x3 cell of the right-hand region wherever a 1 marker appears.",
+  "expressible": "no",
+  "missing": "stamp a pattern at each marker cell location",
+  "rationale": "Requires locating each of a variable number of 1 markers and pasting a template grid at each of their positions. No object iteration, no positional paste, no way to write a sub-grid into a computed offset of a larger grid."
+ },
+ {
+  "task_id": "arc1_36d67576",
+  "transformation": "One fully-coloured template shape exists; every other place in the grid holds a partial copy of it (only its 4-cells) in some rotation/reflection, and the output completes each partial copy with the template's missing coloured cells in the matching orientation.",
+  "expressible": "no",
+  "missing": "template matching and completion of partial copies",
+  "rationale": "Requires locating N partial copies, inferring each copy's rotation/reflection against a template, and writing back per-copy. That is a per-object loop with per-object orientation inference; the DSL has one input variable, no iteration, no object list, and no way to place a sub-grid at a computed offset."
+ },
+ {
+  "task_id": "arc1_36fdfd69",
+  "transformation": "For each connected cluster of 2-cells, fill every non-2 cell inside that cluster's bounding box with 4, leaving everything outside untouched.",
+  "expressible": "no",
+  "missing": "per-object bounding-box fill",
+  "rationale": "There are several independent 2-clusters per grid, each with its own bounding box. crop_bbox works on the whole grid's nonzero extent only, and there is no per-object iteration, no way to enumerate clusters, and no way to paint back into a computed rectangle."
+ },
+ {
+  "task_id": "arc1_3906de3d",
+  "transformation": "Every column is compacted upward: all non-zero cells keep their order but slide to the top of the column, so the loose 2-shape rises and packs against the 1-structure.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "I checked all three training pairs and the test column by column: the output is exactly the per-column order-preserving upward compaction of the input. The program is the single op gravity_up($)."
+ },
+ {
+  "task_id": "arc1_39a8645d",
+  "transformation": "Several 3x3 motifs are scattered around the grid; output the one 3x3 motif that occurs the most times.",
+  "expressible": "no",
+  "missing": "select the most frequently repeated object shape",
+  "rationale": "Needs object segmentation, normalisation of each object to a comparable shape key, a frequency tally over those keys, and an argmax selection returning a grid. The DSL's only object ops are keep_largest/keep_smallest/object_count/largest_object_size; there is no shape-equality test, no grouping, and no grid-valued selection over objects."
+ },
+ {
+  "task_id": "arc1_39e1d7f9",
+  "transformation": "A lined meta-grid holds one multi-cell motif (a coloured plus of meta-cells); the output stamps a copy of that whole motif centred on every other isolated coloured meta-cell.",
+  "expressible": "no",
+  "missing": "stamp a template pattern at each marker location",
+  "rationale": "Requires reading the motif out of the meta-grid, then pasting it at each of several marker positions with an offset computed per marker. There is no sub-grid paste-at-offset op, no marker enumeration, and no iteration; shift_down/shift_right only translate the whole grid by a literal amount."
+ },
+ {
+  "task_id": "arc1_3aa6fb7a",
+  "transformation": "Every three-cell L of 8s that sits inside a 2x2 square gets its missing fourth corner filled with 1.",
+  "expressible": "no",
+  "missing": "per-cell 3x3 neighbourhood rule",
+  "rationale": "This is a local cellular rule (a background cell whose 3x3 window completes a 2x2 of 8s becomes 1), applied at many independent sites. The DSL has no neighbourhood/convolution op and no per-object iteration; the only local-ish ops are the gravity family, which move rather than test neighbourhoods."
+ },
+ {
+  "task_id": "arc1_3ac3eb23",
+  "transformation": "Each coloured cell in row 0 is echoed down the grid: even rows repeat row 0 unchanged, odd rows carry the same colours displaced one column left and one column right.",
+  "expressible": "unclear",
+  "missing": "periodic tiling/repetition of a pattern to fill the grid",
+  "rationale": "Structurally reachable: the odd-row pattern is overlay(shift_right($,1), flip_h(shift_right(flip_h($),1))), and the 6-row periodicity is overlay of shift_down by 2 and 4. But the two-row unit must be re-spelled three times, giving a ~50-node program; cost-ordered bottom-up enumeration would never reach it. A vertical-tiling primitive would collapse it to a few nodes."
+ },
+ {
+  "task_id": "arc1_3af2c5a8",
+  "transformation": "Double the grid in both axes by mirroring: concatenate the grid with its horizontal flip, then stack that with its vertical flip.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Verified on all three training pairs and the test. Directly mirror_v(mirror_h($)), or explicitly vcat(hcat($,flip_h($)), flip_v(hcat($,flip_h($)))) \u2014 about 11 nodes at worst, well within reach."
+ },
+ {
+  "task_id": "arc1_3bd67248",
+  "transformation": "Given an n-row grid whose left column is a solid colour, draw a 2-coloured anti-diagonal from the top-right corner down to just right of the left column, and fill the bottom row (right of the left column) with 4.",
+  "expressible": "no",
+  "missing": "draw a diagonal line",
+  "rationale": "No visible op produces a diagonal. Building one by overlaying shifted copies needs n terms and n varies across examples (3, 7, 10, 15), so no fixed-size composition works; there is no iteration to generate the varying number of shifts."
+ },
+ {
+  "task_id": "arc1_3bdb4ada",
+  "transformation": "Each solid 3-row rectangle keeps its top and bottom rows and has its middle row replaced by an alternating colour/background stripe that starts and ends on the rectangle's own edge columns.",
+  "expressible": "no",
+  "missing": "per-object alternating (striped) interior fill",
+  "rationale": "Several rectangles per grid, and the stripe parity is anchored to each rectangle's own left edge (I checked: one rectangle stripes on even absolute columns, another on odd), so no global checkerboard mask works. Needs per-object bounds plus a per-object mask, neither of which exists."
+ },
+ {
+  "task_id": "arc1_3befdf3e",
+  "transformation": "Each small concentric two-colour square grows outward by one layer, gaining a new ring and re-alternating its inner rings, with the corners of the outermost ring dropped.",
+  "expressible": "no",
+  "missing": "per-object concentric ring expansion",
+  "rationale": "The test grid has two independent shapes, each expanded about its own centre, so this is a per-object geometric rewrite. There is no ring/dilation op, no per-object centre, and no way to paste an enlarged shape back at a computed position."
+ },
+ {
+  "task_id": "arc1_3c9b0459",
+  "transformation": "Rotate the 3x3 grid by 180 degrees.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Checked all four training pairs and the test: output is exactly the input with row order and column order both reversed. The program is rot180($)."
+ },
+ {
+  "task_id": "arc1_3de23699",
+  "transformation": "Four corner dots of one colour mark a rectangle; output the interior of that rectangle with its contents recoloured to the corner-dot colour.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Verified on all four training pairs: crop_bbox($) yields exactly the corner rectangle, remove_border strips the corner row/column leaving the interior, the interior holds a single nonzero colour so most_nonzero_color recovers it, and head(row(crop_bbox($),0)) is always a corner marker giving the target colour. recolor(remove_border(crop_bbox($)), most_nonzero_color(remove_border(crop_bbox($))), head(row(crop_bbox($),0))) is about 13 nodes."
+ },
+ {
+  "task_id": "arc1_3e980e27",
+  "transformation": "Two small multi-colour templates are present, each anchored by a distinctly coloured key cell; every lone key cell elsewhere in the grid is expanded into a full copy of the template that shares its key colour.",
+  "expressible": "no",
+  "missing": "stamp a template pattern at each marker location",
+  "rationale": "Requires extracting two templates, matching each isolated marker to the template with the same key colour, and pasting at a marker-dependent offset. No sub-grid paste-at-offset, no marker enumeration, no iteration."
+ },
+ {
+  "task_id": "arc1_3eda0437",
+  "transformation": "Find the largest all-background rectangle that is at least two rows tall and fill it with 6.",
+  "expressible": "no",
+  "missing": "find the largest all-background rectangle",
+  "rationale": "I confirmed the criterion is a maximal-area zero rectangle constrained to height >= 2 (in train1 the single-row run of ten zeros loses to the 2x4 block). Maximal-rectangle search is a scan with dynamic state; the DSL has no rectangle search, no region ops, and no loop to carry the running best."
+ },
+ {
+  "task_id": "arc1_3f7978a0",
+  "transformation": "A rectangular frame of 5s capped by 8s sits among scattered 8-noise; output the original grid cropped to the 5-cells' bounding box extended one row above and one row below.",
+  "expressible": "no",
+  "missing": "crop to the bounding box of a selected colour",
+  "rationale": "crop_bbox uses all nonzero cells, so the 8-noise widens it to nearly the whole grid. Removing the 8s first (recolor 8->0) gives the right rectangle but destroys the 8s the output must keep, and there is no op that crops the original grid to a separately computed rectangle or extends a crop by a margin."
+ },
+ {
+  "task_id": "arc1_40853293",
+  "transformation": "Every pair of same-coloured isolated dots that share a row or column is joined by a straight line of that colour, with vertical lines drawn over horizontal ones at crossings.",
+  "expressible": "no",
+  "missing": "connect pairs of same-coloured cells with a line",
+  "rationale": "Needs pairing of dots by colour, then drawing a segment between two computed endpoints, repeated for each of five or six pairs. No line-drawing op, no coordinate extraction, no per-pair iteration."
+ },
+ {
+  "task_id": "arc1_4093f84a",
+  "transformation": "A solid bar of 5s attracts every scattered dot: each dot slides along the axis perpendicular to the bar until it stacks against the bar, and is recoloured 5.",
+  "expressible": "no",
+  "missing": "gravity toward an anchor object (direction inferred)",
+  "rationale": "For a horizontal bar the answer is recolor(vcat(gravity_down(top_half($)), gravity_up(bottom_half($))), dot, 5) \u2014 I verified this reproduces trains 1 and 3 exactly. But trains 2 and the test have a vertical bar needing the hcat/left_half/right_half version, and both 14x14 grids are square so no int predicate distinguishes them. One program must satisfy every training pair, and there is no grid-valued conditional to switch axes."
+ },
+ {
+  "task_id": "arc1_41e4d17e",
+  "transformation": "Each hollow 5x5 box of 1s emits a 6-coloured horizontal and vertical line through its centre, spanning the whole grid, drawn underneath the boxes themselves.",
+  "expressible": "no",
+  "missing": "draw a full-length line through each object's centre",
+  "rationale": "Requires each object's centre row and column, then painting a full-width row and full-height column for each of one to three boxes. No object-centre op, no row/column paint op, no iteration."
+ },
+ {
+  "task_id": "arc1_4258a5f9",
+  "transformation": "Every isolated 5 is surrounded by a 3x3 ring of 1s, with the 5 kept at the centre.",
+  "expressible": "unclear",
+  "missing": "dilate each cell into its 3x3 neighbourhood",
+  "rationale": "Structurally reachable: overlay($, union of the eight shifted copies of recolor($,5,1)), where the four negative shifts come from flip_h/flip_v sandwiches around shift_right/shift_down. But that is roughly 55 nodes with eight repeated sub-chains, far beyond cost-ordered enumeration. A single dilation primitive would make it a two-node program."
+ },
+ {
+  "task_id": "arc1_4290ef0e",
+  "transformation": "Several concentric-ring shapes of different sizes and colours are scattered around; output them nested inside one another, largest outermost, sharing a common centre.",
+  "expressible": "no",
+  "missing": "nest objects concentrically by size",
+  "rationale": "Needs extraction of three or four objects, ordering them by size, and compositing each centred inside the next. Requires an object list, per-object crops, size ordering, and centred paste \u2014 none of which the DSL provides, and all of which need iteration."
+ },
+ {
+  "task_id": "arc1_42a50994",
+  "transformation": "Delete every connected component consisting of a single cell, keeping all components of two or more cells (8-connectivity).",
+  "expressible": "no",
+  "missing": "filter objects by size",
+  "rationale": "I verified the rule on trains 1 and the test cell by cell. The DSL exposes only keep_largest and keep_smallest, which select one component; there is no predicate-based filter over all components and no iteration to apply one."
+ },
+ {
+  "task_id": "arc1_4347f46a",
+  "transformation": "Every solid rectangle is hollowed out: its one-cell border is kept and its interior is set to background.",
+  "expressible": "no",
+  "missing": "per-cell 3x3 neighbourhood rule",
+  "rationale": "Uniform as a local rule (a cell whose full 3x3 window is the same nonzero colour becomes background) applied at every interior cell of two to five rectangles. The DSL has no neighbourhood test, no erosion, and no per-object iteration; the outline op that would do it is deliberately hidden."
+ },
+ {
+  "task_id": "arc1_444801d8",
+  "transformation": "Each hollow box of 1s with a notch in its top edge contains one coloured dot; the dot's colour floods the box interior, fills the notch, and paints a bar the width of the box on the row immediately above it.",
+  "expressible": "no",
+  "missing": "flood fill enclosed region with a marker colour",
+  "rationale": "There are one or two boxes per grid, each needing its own interior flood keyed to its own dot colour plus a bar placed relative to its own bounds. No flood fill, no per-object bounds, no iteration, and the two boxes carry different colours so a single global recolor cannot serve both."
+ },
+ {
+  "task_id": "arc1_445eab21",
+  "transformation": "Two hollow rectangles of different colours are present; output a 2x2 grid filled with the colour of the one enclosing the larger area.",
+  "expressible": "unclear",
+  "missing": "select object by bounding-box/enclosed area",
+  "rationale": "const_grid(tile2x2(from_row(singleton(0))), most_nonzero_color($)) fits all three training pairs, since the larger rectangle also has more border cells there. But that is a coincidence of the training set: in the test both rectangles have exactly 24 border cells and only enclosed area (21 vs 16) separates them, so the true rule needs per-object bounding-box area ranking, which the DSL cannot compute."
+ },
+ {
+  "task_id": "arc1_54d82841",
+  "transformation": "For each hollow-square/pi shape, place a single 4 in the bottom row of the grid at the column of that shape's horizontal centre, leaving everything else unchanged.",
+  "expressible": "no",
+  "missing": "per-object marker placement at an object-derived coordinate",
+  "rationale": "Requires enumerating each object, computing its centre column, and writing one cell per object into the bottom row. There is no object iterator, no per-object coordinate extraction, and no cell-write op; keep_largest/keep_smallest only select one object and nothing can emit a mark per object."
+ },
+ {
+  "task_id": "arc1_54d9e175",
+  "transformation": "The grid is divided by full 5-columns into cells; each cell contains one coloured marker (1..4) and the whole cell is flood-filled with marker+5 (1->6, 2->7, 3->8, 4->9), separator lines kept.",
+  "expressible": "no",
+  "missing": "per-region recolour keyed by a marker contained in that region",
+  "rationale": "Each separator-delimited region must be filled with a colour derived from a value found inside that same region. That is a per-region lookup plus per-region fill; recolor(G,C,C) is global, and there is no way to bind or iterate regions. The +5 arithmetic is trivial but has nowhere to be applied region-wise."
+ },
+ {
+  "task_id": "arc1_5521c0d9",
+  "transformation": "Each solid coloured rectangle sitting on the bottom edge is translated upward by a number of rows equal to its own height.",
+  "expressible": "no",
+  "missing": "per-object translation by an object-derived offset",
+  "rationale": "shift_down/shift_right apply one offset to the whole grid. Here each rectangle needs a different offset equal to its own height, so the offsets must be computed and applied per object. No iteration, no per-object shift."
+ },
+ {
+  "task_id": "arc1_5582e5ca",
+  "transformation": "Output a grid of the same size entirely filled with the input's most frequent colour.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Directly const_grid($, most_color($)) \u2014 a depth-3 chain. Verified on all four pairs: the majority colour is 4, 9, 6 and 8 respectively, and 0 never dominates."
+ },
+ {
+  "task_id": "arc1_5614dbcf",
+  "transformation": "A 9x9 grid of nine 3x3 blocks, each a solid colour corrupted by scattered 5-noise, is reduced to a 3x3 grid holding each block's majority colour.",
+  "expressible": "no",
+  "missing": "block-wise aggregate downscale (majority colour or count per block)",
+  "rationale": "downscale(G,3) can only sample a fixed representative cell per block, and train2 block (1,0) has a 5 exactly at the sampled top-left corner while the block's true value is 0, so sampling gives the wrong answer. Majority per block is needed, and mode/most_color cannot be applied block-wise without iteration."
+ },
+ {
+  "task_id": "arc1_56dc2b01",
+  "transformation": "The 3-coloured shape is translated until it abuts the full 2-line, and a full 8-line is drawn immediately on the shape's far side.",
+  "expressible": "no",
+  "missing": "object translation to abut a marker line, with trailing marker line",
+  "rationale": "Needs the object's bounding box, the line's position, the resulting gap, a whole-object translation by that gap, and then a new line drawn at a position derived from the moved object. Global shift_* cannot move only the shape while leaving the 2-line fixed, and nothing can draw the 8-line."
+ },
+ {
+  "task_id": "arc1_56ff96f3",
+  "transformation": "Each pair of same-coloured isolated dots is replaced by the solid filled rectangle whose opposite corners are those two dots.",
+  "expressible": "no",
+  "missing": "filled bounding box between paired same-coloured cells",
+  "rationale": "Requires pairing cells by colour, taking their joint bounding box, and filling it \u2014 repeated once per colour pair. crop_bbox returns a cropped grid, not an in-place filled rectangle, and there is no per-colour grouping or iteration."
+ },
+ {
+  "task_id": "arc1_57aa92db",
+  "transformation": "One complete cross/plus template is given; every other partial copy elsewhere is completed to the template's full shape, drawn in that copy's own colour and scale.",
+  "expressible": "no",
+  "missing": "template shape completion at each partial copy",
+  "rationale": "Requires recognising a template shape, locating each partial instance, inferring its scale and anchor, and stamping the missing arms in the local colour. This is shape matching plus per-instance stamping \u2014 several capabilities beyond a single call chain over one variable."
+ },
+ {
+  "task_id": "arc1_5ad4f10b",
+  "transformation": "A large solid shape (a 3x3 pattern scaled by k) sits among scattered noise dots of a second colour; output the 3x3 pattern drawn in the noise colour.",
+  "expressible": "unclear",
+  "missing": "swap of the two non-background colours",
+  "rationale": "A chain exists in principle: recolor the noise colour to 0, crop_bbox, downscale by div(width,3), then recolor the shape colour to the noise colour. But naming the noise colour has no primitive \u2014 it only works via the fragile trick sub(sum(dedup(flatten($))), most_nonzero_color($)), which relies on exactly two nonzero colours, and the whole program is ~16 nodes deep with the crop_bbox subchain recomputed, so it is far outside any realistic enumeration budget. A two-colour swap primitive is what actually closes it."
+ },
+ {
+  "task_id": "arc1_5bd6f4ac",
+  "transformation": "From a 9x9 noisy grid, output the top-right 3x3 corner unchanged.",
+  "expressible": "unclear",
+  "missing": "arbitrary rectangular subgrid crop",
+  "rationale": "Verified on all five pairs that the answer is literally rows 0-2, cols 6-8. But no op crops a 3x3 corner: top_half/right_half on odd dimension 9 give 4- or 5-wide halves, never 3. It is expressible only by row surgery \u2014 vcat(vcat(from_row(drop(row($,0),6)), from_row(drop(row($,1),6))), from_row(drop(row($,2),6))) \u2014 roughly 17 nodes, which the cost-ordered enumerator will never reach. A crop/subgrid op is the real gap."
+ },
+ {
+  "task_id": "arc1_5c0a986e",
+  "transformation": "From each 2x2 square, diagonal rays of its own colour are emitted from the two corners facing away from the other square, running to the grid edge.",
+  "expressible": "no",
+  "missing": "diagonal ray drawing from a cell",
+  "rationale": "Nothing in the DSL draws a diagonal line. The direction also depends on the relative position of the two squares, so it needs per-object geometry plus ray rendering \u2014 neither exists."
+ },
+ {
+  "task_id": "arc1_5c2c9af4",
+  "transformation": "Each isolated dot is surrounded by concentric hollow squares of its colour at every even radius, extending across the whole grid and overlapping.",
+  "expressible": "no",
+  "missing": "concentric square rings around a cell",
+  "rationale": "Requires generating unbounded nested outlines centred on each dot and overlaying them. There is no ring/outline drawing op (outline is hidden anyway), no per-dot centring, and no repetition construct to produce a growing family of rings."
+ },
+ {
+  "task_id": "arc1_5daaa586",
+  "transformation": "Crop to the rectangle bounded by the four full coloured lines, then replace the interior noise with solid bars accumulating inward from the marked side.",
+  "expressible": "no",
+  "missing": "crop to a line-delimited rectangle",
+  "rationale": "Two independent gaps: cropping to the sub-rectangle whose borders are the four full-length lines (crop_bbox crops to nonzero content, which here is the entire grid because of the scattered noise), and then rewriting the interior as counted/accumulated bars. Neither is reachable."
+ },
+ {
+  "task_id": "arc1_60b61512",
+  "transformation": "Each 4-coloured shape has the empty cells of its own bounding box filled with 7.",
+  "expressible": "no",
+  "missing": "per-object bounding-box completion fill",
+  "rationale": "Each object's bounding box must be computed and its holes filled in a new colour, independently per object and in place. crop_bbox extracts a subgrid of the whole nonzero region rather than filling a box, and there is no per-object loop."
+ },
+ {
+  "task_id": "arc1_6150a2bd",
+  "transformation": "Rotate the grid by 180 degrees.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "rot180($) exactly. Checked on both training pairs and the test pair (338/370/500 -> 005/073/833)."
+ },
+ {
+  "task_id": "arc1_623ea044",
+  "transformation": "Draw both full diagonals of the grid through the single coloured dot, in the dot's colour.",
+  "expressible": "no",
+  "missing": "diagonal ray drawing from a cell",
+  "rationale": "Same gap as 5c0a986e: no primitive produces a diagonal line, and the diagonals must be anchored at a located cell. Nothing composes to an X through an arbitrary point."
+ },
+ {
+  "task_id": "arc1_62c24649",
+  "transformation": "Output the 6x6 four-fold mirror of the 3x3 input: the grid beside its horizontal flip, stacked above the vertical flip of that pair.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "vcat(hcat($,flip_h($)), flip_v(hcat($,flip_h($)))) reproduces all four pairs; mirror_h/mirror_v may collapse it further. Recomputing hcat($,flip_h($)) twice is fine since it is a pure chain from $."
+ },
+ {
+  "task_id": "arc1_63613498",
+  "transformation": "A key shape sits in a 5-delimited box; every other shape in the grid congruent to that key is recoloured to 5.",
+  "expressible": "no",
+  "missing": "per-object shape matching against a template",
+  "rationale": "Requires extracting the key shape, comparing it up to translation with every other object, and recolouring only the matches. There is no grid equality test, no per-object extraction, and no conditional over grids (if_int returns an int only)."
+ },
+ {
+  "task_id": "arc1_6430c8c4",
+  "transformation": "Two 4x4 panels separated by a 4-row are combined cellwise: output 3 where both panels are empty, 0 elsewhere (a NOR).",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "recolor(invert_mask(overlay(top_half($), bottom_half($))), 1, 3). Verified cellwise on train1 and train2. The one assumption is that top_half/bottom_half take floor(9/2)=4 rows each, which conveniently drops the separator row; if they round up to 5 the halves overlap on the separator and this breaks."
+ },
+ {
+  "task_id": "arc1_6455b5f5",
+  "transformation": "Full 2-lines partition the grid into rectangular regions; the largest region is filled with 1 and the smallest with 8, the rest untouched.",
+  "expressible": "no",
+  "missing": "per-region recolour by size rank",
+  "rationale": "Regions must be segmented, their areas ranked, and two of them filled with different colours in place. keep_largest/keep_smallest return a single object as a grid and cannot recolour distinct regions differently, and the regions here are background areas bounded by lines rather than coloured objects."
+ },
+ {
+  "task_id": "arc1_662c240a",
+  "transformation": "Three stacked 3x3 blocks are given; output the one block that is not symmetric about its main diagonal.",
+  "expressible": "no",
+  "missing": "grid comparison with grid-valued selection",
+  "rationale": "Verified the rule: in every pair two blocks equal their own transpose and one does not. Expressing it needs an equality predicate over grids and a conditional returning a grid. if_int(B,I,I) branches on ints only, and there is no grid equality op, so the selection cannot be made."
+ },
+ {
+  "task_id": "arc1_67385a82",
+  "transformation": "Every 3-coloured object of size greater than one cell is recoloured to 8; isolated single 3 cells stay 3.",
+  "expressible": "no",
+  "missing": "per-object recolour by object size",
+  "rationale": "The recolour decision depends on each object's own cell count. recolor is global, largest_object_size returns a single int about the whole grid, and keep_largest/keep_smallest select exactly one object rather than a size-filtered set. No iteration to apply the size test per object."
+ },
+ {
+  "task_id": "arc1_673ef223",
+  "transformation": "Each 8 dot shoots a horizontal 8-trail to the nearest 2-wall and turns 4, and the row pattern of the dots is mirrored onto the opposite wall as full 8-rows.",
+  "expressible": "no",
+  "missing": "horizontal ray projection from a cell to a wall",
+  "rationale": "Multi-step spatial reasoning: locate each dot, find the nearest wall, fill the intervening span, recolour the dot's endpoint, then transfer the relative row offsets to a second wall as complete rays. None of ray filling, per-dot processing, or cross-wall offset transfer exists."
+ },
+ {
+  "task_id": "arc1_6773b310",
+  "transformation": "An 11x11 grid of nine 3x3 blocks separated by 8-lines is reduced to 3x3, with 1 where the block contains two 6s and 0 where it contains one.",
+  "expressible": "no",
+  "missing": "block-wise aggregate downscale (majority colour or count per block)",
+  "rationale": "Verified the count rule on train1 across all nine blocks. It needs count_color applied independently to each block and thresholded into an output cell. count_color is whole-grid only, there is no way to address a block, and no cell-by-cell grid construction from computed ints."
+ },
+ {
+  "task_id": "arc1_67a3c6ac",
+  "transformation": "Mirror the grid horizontally (reverse each row).",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "flip_h($) exactly. Verified on all three training pairs and the 3x3 test (761/676/622 -> 167/676/226)."
+ },
+ {
+  "task_id": "arc1_447fd412",
+  "transformation": "A small key shape made of 1s attached to a 2-marker defines a rule; every solid k-by-k block of 2s elsewhere gets the key's 1-arm reproduced next to it scaled by k (clipped at the grid edge).",
+  "expressible": "no",
+  "missing": "per-object rule application",
+  "rationale": "Requires visiting each 2-block, measuring its size, scaling the template arm by that size and drawing it in the block's local frame. That is a map-with-body over objects plus per-object scaling and placement; with one nested chain over $ and no iteration there is no way to touch several blocks with size-dependent geometry."
+ },
+ {
+  "task_id": "arc1_44d8ac46",
+  "transformation": "For each hollow 5-outlined shape, recolour its enclosed hole to 2 only if the hole is a perfect square; leave non-square or irregular holes untouched.",
+  "expressible": "no",
+  "missing": "per-object rule application",
+  "rationale": "Verified the predicate is squareness of the hole (3x3 and 4x4 holes fill; 4x3, 2x4, 1x2 and L-shaped holes do not). This needs, per object, enclosed-region detection, a shape test, and a conditional recolour of just that object. if_int is the only conditional and it yields an int, and there is no per-object loop, so several objects cannot receive independent verdicts."
+ },
+ {
+  "task_id": "arc1_44f52bb0",
+  "transformation": "Emit a 1x1 grid coloured 1 if the 3x3 pattern of 2s is left-right mirror symmetric, else 7.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Symmetry is testable without list equality: eq(sum(abs_all(zip_add(flatten($), map_mul(flatten(flip_h($)), neg(1))))), 0). Feed that to if_int(B,1,inc(double(3))) and wrap with from_row(singleton(...)). $ may be referenced twice since it is the input variable, not an intermediate. Verified on all six training pairs and the test. Roughly 14 nodes, so cost-ordered enumeration would likely not reach it, but it is expressible."
+ },
+ {
+  "task_id": "arc1_4522001f",
+  "transformation": "An L of 3s around a single 2 selects a diagonal direction; the output is a 9x9 canvas carrying two 4x4 blocks of 3 stacked along that diagonal at an offset derived from the L's corner.",
+  "expressible": "no",
+  "missing": "object placement at computed coordinates",
+  "rationale": "The block colour and size are fixed, but which diagonal (main vs anti) and the 0/1-cell offset of the 8x8 pair inside the 9x9 canvas both come from the orientation of the L. Nothing in the DSL writes a sub-grid at a computed row/col; hcat/vcat only glue at fixed edges and add_border pads all four sides equally, so the two candidate layouts cannot be built and selected."
+ },
+ {
+  "task_id": "arc1_4612dd53",
+  "transformation": "Complete the partially drawn rectangular outline of 1s into a full border, colouring the previously missing border cells 2 and leaving the grid otherwise unchanged.",
+  "expressible": "no",
+  "missing": "object placement at computed coordinates",
+  "rationale": "The cropped answer is expressible: overlay(add_border(const_grid(remove_border(crop_bbox($)),0),2), crop_bbox($)) yields the completed ring with 1s preserved and 2s in the gaps. The blocker is putting it back: the rectangle's top-left offset varies per example (row 1, row 2, row 3) and no op pastes a smaller grid into a larger one at a computed position; shift_* preserves size and the number of vcat/hcat pads is fixed at program-write time."
+ },
+ {
+  "task_id": "arc1_46442a0e",
+  "transformation": "Output a 2x2 arrangement of the input's four rotations: original top-left, 90-degree top-right, 270-degree bottom-left, 180-degree bottom-right.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "vcat(hcat($, rot90($)), hcat(rot270($), rot180($))) reproduces every pair exactly, including the 2x2 case. Nine nodes, all visible ops, well within enumeration reach."
+ },
+ {
+  "task_id": "arc1_469497ad",
+  "transformation": "Upscale the whole grid by k = (number of distinct colours in the last row) + 1, then draw diagonal rays of 2 from the corners of the empty region inward.",
+  "expressible": "no",
+  "missing": "diagonal ray drawing",
+  "rationale": "The scaling half is expressible: upscale($, inc(unique_count(row($,height($))))) reproduces every coloured region and the legend stripes exactly in all four examples. What remains is the X of 2s in the blank area, and the DSL has no way to set cells along a diagonal: every grid op is a whole-grid transform, and there is no per-cell coordinate access to write."
+ },
+ {
+  "task_id": "arc1_46f33fce",
+  "transformation": "Each isolated pixel becomes a 4x4 block whose position is its coordinate divided by two, on a 20x20 canvas.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Every mark sits at an even 1-indexed row and column, and downscale samples g[(r-1)*k+1][(c-1)*k+1], so shifting up and left by one first lands them on the sampling lattice: upscale(downscale(shift_right(shift_down($,neg(1)),neg(1)),2),4). shift_* accepts negative k (bounds-checked), upscale allows k up to 5, and 4 = inc(3). Verified on all three training pairs and the test."
+ },
+ {
+  "task_id": "arc1_47c1f68c",
+  "transformation": "Take the top-left quadrant cut out by the central cross, recolour its shape to the cross's colour, and mirror it into all four quadrants of a grid one smaller in each dimension.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "mirror_v(mirror_h(fill_nonzero(top_half(left_half($)), most_nonzero_color($)))). top_half/left_half use floor(n/2), which for the odd sizes 7, 9, 11, 13 cuts exactly the quadrant before the separator; the separator colour is always the most frequent nonzero (its row plus column dominates); the marked quadrant is always the top-left one. Six nodes, verified on all pairs."
+ },
+ {
+  "task_id": "arc1_484b58aa",
+  "transformation": "Restore a doubly periodic wallpaper pattern by filling the rectangular blocks of zeros with the values the periodicity dictates.",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "Requires inferring the pattern's period vector from the unoccluded cells and then sampling that lattice at every hole. There is no op that reads a cell at a computed offset, no way to infer a period, and no per-cell write; the whole-grid shifts and cats cannot reconstruct a 29x29 field from scattered evidence."
+ },
+ {
+  "task_id": "arc1_48d8fb45",
+  "transformation": "Output the 3x3 bounding box of the one object that touches the single 5-coloured marker cell.",
+  "expressible": "no",
+  "missing": "marker-selected object extraction",
+  "rationale": "Selection is by adjacency to the marker, not by size: in train1 the chosen object has 6 cells while another has 7, so keep_largest and keep_smallest both pick the wrong one. The DSL has no way to filter components by colour membership or by proximity to a given cell, and crop_bbox on the whole grid would span all objects."
+ },
+ {
+  "task_id": "arc1_4938f0c2",
+  "transformation": "Reflect the coloured figure horizontally and vertically about the centre of the small 3-coloured marker block, producing a four-fold symmetric figure in place.",
+  "expressible": "no",
+  "missing": "mirror about a computed axis",
+  "rationale": "The mirror axes are the marker's centre lines, not the grid's: in train1 columns 8 and 11 swap (axis 9.5) inside a 30-wide grid, and rows 6 and 9 swap (axis 7.5) inside 20 rows. flip_h/flip_v/mirror_* only reflect about the grid's own centre, and there is no way to translate the figure to centre it, reflect, and translate back at a computed offset."
+ },
+ {
+  "task_id": "arc1_496994bd",
+  "transformation": "Mirror the coloured band at the top of the grid down to the bottom edge, keeping the middle empty.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "overlay($, flip_v($)) exactly. The band never reaches the vertical midpoint in any example, so the original and its vertical flip never collide and overlay's nonzero-wins rule is safe. Three nodes; trivially reachable by enumeration."
+ },
+ {
+  "task_id": "arc1_49d1d64f",
+  "transformation": "Grow the grid by one cell on each side, replicating the first/last row outward and the first/last column outward, with the four corners left 0.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Build the vertical extension X = vcat(vcat(from_row(row($,1)), $), from_row(row($,height($)))), then each side column as transpose(from_row(push_back(push_front(col($,k),0),0))) with k = 1 and width($), and hcat them onto X. The zero corners come free from the push_front/push_back. Verified against all four pairs. About 28 nodes, so far beyond cost-ordered enumeration in practice, but structurally within the 105 ops."
+ },
+ {
+  "task_id": "arc1_4be741c5",
+  "transformation": "Output the sequence of distinct band colours in order, as a single row when the bands are vertical and a single column when they are horizontal.",
+  "expressible": "no",
+  "missing": "grid-valued conditional",
+  "rationale": "The colour sequence itself is easy: dedup(flatten($)) gives [4,2,8], [2,8,5], [6,4,2,3], [3,2,1,8] correctly in all four cases. The blocker is orientation: the answer is 1xN for vertical bands and Nx1 for horizontal ones, and the test grid is 14x14 so height-vs-width cannot decide it. Choosing between from_row(L) and transpose(from_row(L)) needs a branch returning a grid, but if_int is the only conditional and it returns an int."
+ },
+ {
+  "task_id": "arc1_4c4377d9",
+  "transformation": "Stack the vertically flipped grid on top of the original, doubling the height.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "vcat(flip_v($), $) reproduces all four training pairs and the test. Note this is not mirror_v, which produces vcat(g, flip_v(g)) and is self-symmetric under flip_v, so the explicit vcat is needed; still only three nodes."
+ },
+ {
+  "task_id": "arc1_4c5c2cf0",
+  "transformation": "Reflect the free-form shape horizontally and vertically about the centre of the small X-shaped marker, leaving the marker in place.",
+  "expressible": "no",
+  "missing": "mirror about a computed axis",
+  "rationale": "Same structure as 4938f0c2: in train2 the axes are column 5 and row 7 of a 14x14 grid, in train1 column 7 and row 8, both fixed by the marker rather than by the canvas. The DSL only mirrors about the grid's own centre and cannot re-centre a figure on a computed point first."
+ },
+ {
+  "task_id": "arc1_50846271",
+  "transformation": "Wherever a radius-2 plus shape is partly drawn in 2s but partly occluded by the 5/0 noise, repaint the occluded plus cells as 8.",
+  "expressible": "no",
+  "missing": "per-object rule application",
+  "rationale": "I confirmed the template is a fixed plus (arms of length 2) and that each grid contains several partly occluded copies at different positions; only the cells belonging to a plus are repainted, while identical-looking stray 2s just outside the arms are left alone. This needs a scan for template occurrences and an independent local repaint at each hit, which is iteration with a body plus positional writes."
+ },
+ {
+  "task_id": "arc1_508bd3b6",
+  "transformation": "Continue the diagonal trajectory started by the two 8 pixels in 3s, bouncing it off the solid wall of 2s and continuing to the grid edge.",
+  "expressible": "no",
+  "missing": "diagonal ray drawing with reflection",
+  "rationale": "Requires tracing a diagonal from a seed, detecting the collision cell with the wall, reversing one component of the direction and tracing again. The DSL has no per-cell write, no coordinate arithmetic feeding into placement, and no ray or line primitive; whole-grid ops cannot produce a path whose bend position depends on where the wall is."
+ },
+ {
+  "task_id": "arc1_50cb2852",
+  "transformation": "Recolour the interior of every solid rectangle to 8, keeping a one-cell border of its original colour.",
+  "expressible": "yes",
+  "missing": "",
+  "rationale": "Because all shapes are solid rectangles separated by background, the interior is exactly the cells whose four neighbours are all nonzero, which is a local test. Build it as AND of five shifted masks via De Morgan: invert_mask(overlay(overlay(overlay(overlay(invert_mask($), invert_mask(shift_down($,1))), invert_mask(shift_down($,neg(1)))), invert_mask(shift_right($,1))), invert_mask(shift_right($,neg(1))))), then overlay($, fill_nonzero(that, 8)). Off-grid shifts correctly leave edge-touching rows out, matching the test's rectangle that ends at the last row. About 28 nodes, so unreachable in practice, but expressible."
+ },
+ {
+  "task_id": "arc1_5117e062",
+  "transformation": "Output the 3x3 shape that contains the single 8-coloured cell, with that 8 replaced by the shape's own colour.",
+  "expressible": "no",
+  "missing": "marker-selected object extraction",
+  "rationale": "Four candidate 3x3 shapes are present and the target is picked by containing the 8, not by size: in train1 the marked shape has 5 cells while another has 7, so keep_largest/keep_smallest choose wrongly. There is no op that filters components by which colours they contain, and crop_bbox over the full grid spans all four shapes."
+ },
+ {
+  "task_id": "arc1_5168d44c",
+  "transformation": "Slide the 3x3 boxed marker two cells along the dotted line it sits on (down or right depending on the line's orientation) and restore the dot pattern it vacated.",
+  "expressible": "no",
+  "missing": "object placement at computed coordinates",
+  "rationale": "Two separate blockers, both about placement. First, only the box moves while the dotted background stays put, and shifting the whole grid loses the leading dot (in train1 the dot at column 1 survives in the output but would be shifted away). Second, the direction is right in train1/test and down in train2/train3, so even a whole-grid shift would need a grid-valued branch. No op translates a selected component alone."
+ },
+ {
+  "task_id": "arc1_539a4f51",
+  "transformation": "Read the input as concentric L-layers with colour sequence C, then emit a 10x10 grid where out[r][c] = C[max(r,c) mod p], p being the number of non-blank layers.",
+  "expressible": "no",
+  "missing": "concentric-layer pattern extrapolation",
+  "rationale": "I verified the max(r,c) mod p law on all four pairs (p = 4 for the two examples with a blank last row/column, 5 otherwise). For p = 5 the result happens to decompose into 5x5 blocks, but for p = 4 it does not, so no fixed arrangement of halves/cats works. Building it by ten nested L-wraps would additionally need to index a colour by a computed integer, and the type system offers no int-to-colour path: nth returns I while const_grid/recolor demand C, whose only sources are the literals 0..5 and the three most/least-colour ops."
+ },
+ {
+  "task_id": "arc1_53b68214",
+  "transformation": "Extend the input's repeating motif downward to fill a 10-row grid, continuing along the motif's own period vector.",
+  "expressible": "no",
+  "missing": "periodic pattern completion",
+  "rationale": "The period vector differs per instance: (2,0) in train2 and train3, but (2,2) in train1, where the staircase continues down-and-right and is clipped by the right edge. So it is not a vertical tiling, and vcat($,$) would in any case overshoot for the 6- and 8-row inputs with no op to take the first 10 rows. Inferring a period and sampling it is outside the vocabulary."
+ },
+ {
+  "task_id": "arc1_543a7ed5",
+  "transformation": "Draw a 3-coloured ring around every 6-coloured shape and recolour each shape's enclosed background hole to 4.",
+  "expressible": "no",
+  "missing": "per-object rule application",
+  "rationale": "Two independent per-object jobs: a halo drawn one cell outside each shape's bounding box, and a fill of each shape's enclosed cavity. Each grid holds two or three shapes at different offsets, so the halo cannot be built by add_border on the whole grid, and the cavity is not locally detectable here (a 2-cell-wide hole fails the four-neighbour test), it needs connectivity to the border. Both demand iteration over components with positional output."
+ }
+]
