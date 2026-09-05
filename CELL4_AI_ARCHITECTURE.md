@@ -54,7 +54,7 @@ the planner nothing to tell futures apart with. Keep them separate.
 
 ## Current shape of `cell4.lua`
 
-Single file, eight internal modules (Lua tables), in dependency order:
+Single file, nine internal modules (Lua tables), in dependency order:
 
 1. **Utils** — clamp/sigmoid/relu/tanh/dot/softmax/copyArray/sortScored.
    Pure functions. `softmax` subtracts the max before exponentiating
@@ -73,14 +73,14 @@ Single file, eight internal modules (Lua tables), in dependency order:
    tested before a trained model exists); `loadWeights` validates shape
    *and* rejects non-numeric/NaN values; `describe()` reports the exact
    shape the trainer must produce; `forward()` runs the pass.
-4b. **PolicyFormat** — the trainer ↔ runtime interchange: a line-based text
+5. **PolicyFormat** — the trainer ↔ runtime interchange: a line-based text
    format carrying the training contract alongside the weights. Parsed by
    hand, deliberately **not** a Lua chunk run through `load()` (that would
    execute whatever arrives, and Roblox disables `loadstring` anyway) and
    deliberately not JSON (no library, no host-specific API needed). Malformed
    input returns `(nil, reason)` rather than raising — a bad model file is an
    expected condition. `tools/export_policy.py` is the trainer-side half.
-5. **Perception** — `normalize(raw, spec, previous)` produces
+6. **Perception** — `normalize(raw, spec, previous)` produces
    `{named, featureVector, raw, predicted, featureErrors}`: a name-keyed
    table for rule authors and a fixed-order vector for the network, from one
    declarative spec. `clone`/`withValues`/`withDelta` derive new states while
@@ -100,7 +100,7 @@ Single file, eight internal modules (Lua tables), in dependency order:
    imagined states self-consistent — the planner calls it after every action's
    effects, so a goal reading a trend during lookahead sees the trend that
    action would create rather than one left over from the real world.
-6. **Planner** — bounded beam search over registered actions
+7. **Planner** — bounded beam search over registered actions
    (`preconditions` / `effects` / `cost`). Scores imagined states with the
    reasoner's *goals*, so lookahead and wanting share one definition of
    "good." Plans are scored as **average discounted utility per step**
@@ -110,7 +110,7 @@ Single file, eight internal modules (Lua tables), in dependency order:
    re-plan each tick with fresh perception). Returns `nil` — rather than an
    arbitrary pick — when there are no actions, none applicable, or no goals
    to rank futures by.
-7. **Reasoning** — the single place a decision is made. Three vote sources
+8. **Reasoning** — the single place a decision is made. Three vote sources
    feed one ranking: `rule` (reactive preferences), `plan` (first step of
    the best sequence), `policy` (the trained net's softmaxed preferences).
    Votes for the same action name **add**. That's the anti-hallucination
@@ -118,10 +118,12 @@ Single file, eight internal modules (Lua tables), in dependency order:
    can always outweigh it, and the trace attributes every contribution.
    `decide()` returns the winner plus the full ranked trace, and the winner
    carries `confidence` = margin over the runner-up ÷ winning score.
-8. **Pipeline** — `step(rawSignals, reward)` chains
-   perceive → smooth → remember → decide → hysteresis → confidence gate,
-   and records the transition. Also `explain(result)` (human-readable
-   trace), `trainingContract()`, `exportExperience()`, `clearExperience()`.
+9. **Pipeline** — `step(rawSignals, reward)` chains
+   perceive → remember → smooth → decide → hysteresis → confidence gate,
+   and records the transition. Also `endEpisode(finalReward)`,
+   `explain(result)` (human-readable trace), `trainingContract()`,
+   `policyTemplate(hiddenSizes)`, `loadPolicy(textOrBundle)`,
+   `exportExperience()`, `clearExperience()`.
 
 ### Behaviour that isn't obvious from the module list
 
