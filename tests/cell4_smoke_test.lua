@@ -592,6 +592,75 @@ assertTrue(explanation:find("ABSTAINED") == nil, "explain() only flags abstentio
 assertTrue(abstaining:explain(abstained):find("ABSTAINED"), "explain() flags abstention when it did happen")
 
 -- =====================================================================
+-- Episode boundaries: a transition must never bridge two lives.
+-- =====================================================================
+local episodic = Cell4.Pipeline.new({
+	perceptionSpec = spec,
+	reasoning = reasoning, -- flee scales with threat, explore inversely
+	clock = fakeClock,
+	smoothing = { threat = 3 },
+	switchMargin = 0.5,
+})
+fakeTime = fakeTime + 1
+episodic:step({ threat = 90, health = 100 })
+fakeTime = fakeTime + 1
+episodic:step({ threat = 95, health = 100 }, 1)
+assertEq(#episodic:exportExperience().records, 1, "normal step closes the previous transition")
+
+-- The agent dies here.
+assertEq(episodic:endEpisode(-10), true, "endEpisode closes the outstanding transition")
+local afterDeath = episodic:exportExperience().records
+assertEq(#afterDeath, 2, "the final transition of the episode is recorded")
+local terminal = afterDeath[2]
+assertEq(terminal.done, true, "the final transition is marked terminal")
+assertEq(terminal.nextFeatures, nil, "a terminal transition has no next state to bootstrap from")
+assertEq(terminal.reward, -10, "the terminal reward is recorded")
+assertEq(afterDeath[1].done, false, "mid-episode transitions are not marked terminal")
+assertEq(afterDeath[1].episode, 1, "transitions carry their episode id")
+
+-- New life: nothing from the old one may leak in.
+fakeTime = fakeTime + 1
+local reborn = episodic:step({ threat = 0, health = 100 })
+assertEq(reborn.decision, "explore", "the new life decides on its own state, not the old commitment")
+assertEq(reborn.held, false, "hysteresis does not hold an action across a death")
+assertNear(reborn.state.named.threat, 0, 1e-9,
+	"smoothing does not average the previous life's telemetry into the new one")
+
+fakeTime = fakeTime + 1
+episodic:step({ threat = 0, health = 100 }, 1)
+local records = episodic:exportExperience().records
+assertEq(#records, 3, "the new episode records its own transitions")
+assertEq(records[3].episode, 2, "new transitions carry the new episode id")
+-- The crucial guarantee: no record bridges the boundary.
+for i = 2, #records do
+	if records[i].episode ~= records[i - 1].episode then
+		assertEq(records[i - 1].done, true, "the last record of an episode is always terminal")
+	end
+end
+
+-- endEpisode with nothing outstanding is a safe no-op that still resets.
+local idleEpisodic = Cell4.Pipeline.new({
+	perceptionSpec = spec, reasoning = reasoning, clock = fakeClock,
+})
+assertEq(idleEpisodic:endEpisode(0), false, "endEpisode with no pending transition records nothing")
+assertEq(#idleEpisodic:exportExperience().records, 0, "no phantom terminal record is invented")
+assertEq(idleEpisodic.episode, 2, "the episode counter still advances")
+
+-- Beliefs written by rules survive a boundary; the committed action does not.
+local survivor = Cell4.Pipeline.new({
+	perceptionSpec = spec, reasoning = reasoning, clock = fakeClock,
+})
+survivor.memory:remember("learned:enemyIsFast", true, 1)
+fakeTime = fakeTime + 1
+survivor:step({ threat = 90, health = 100 })
+survivor:endEpisode(0)
+assertEq((survivor.memory:recall("learned:enemyIsFast", math.huge)), true,
+	"knowledge learned in one episode carries forward")
+assertEq((survivor.memory:recall("cell4:lastAction", math.huge)), nil,
+	"the committed action does not carry forward")
+assertEq(#survivor.memory:recentContext(10), 0, "observations are cleared at the boundary")
+
+-- =====================================================================
 -- Integration soak: every feature enabled at once, driven over many ticks
 -- with varying signals. Unit tests cover each part in isolation; this is
 -- where interaction bugs between them would show up.
@@ -669,7 +738,15 @@ for tick = 1, 200 do
 	if result.abstained then abstentions = abstentions + 1 end
 	if previousDecision and previousDecision ~= result.decision then switches = switches + 1 end
 	previousDecision = result.decision
+
+	-- The agent "dies" periodically; the run must survive it and the
+	-- recorded experience must stay well-formed across the boundary.
+	if tick % 37 == 0 then
+		soak:endEpisode(-1)
+		previousDecision = nil
+	end
 end
+assertTrue(soak.episode > 1, "soak ran across multiple episodes")
 
 -- The agent should actually use its repertoire rather than collapsing onto
 -- one action, and should not stutter on every single tick either.
@@ -683,10 +760,22 @@ assertEq(#soakExport.records, 64, "soak fills the experience buffer to capacity"
 for i, record in ipairs(soakExport.records) do
 	assertTrue(record.actionIndex ~= nil, "soak record " .. i .. " has a contract action index")
 	assertEq(#record.features, 2, "soak record " .. i .. " has a full feature vector")
-	assertEq(#record.nextFeatures, 2, "soak record " .. i .. " has a full next-state vector")
 	assertTrue(type(record.reward) == "number", "soak record " .. i .. " has a numeric reward")
+	-- Terminal and non-terminal records must be internally consistent: a
+	-- terminal record has no next state, a non-terminal one always does.
+	if record.done then
+		assertEq(record.nextFeatures, nil, "soak terminal record " .. i .. " has no next state")
+	else
+		assertEq(#record.nextFeatures, 2, "soak record " .. i .. " has a full next-state vector")
+	end
 	if i > 1 then
-		assertEq(record.step, soakExport.records[i - 1].step + 1, "soak records are contiguous")
+		local previous = soakExport.records[i - 1]
+		assertEq(record.step, previous.step + 1, "soak records are contiguous")
+		if record.episode ~= previous.episode then
+			assertEq(previous.done, true, "soak: an episode never ends without a terminal record")
+		else
+			assertEq(previous.done, false, "soak: a terminal record never sits mid-episode")
+		end
 	end
 end
 assertEq(#soakExport.contract.actions, 3, "soak contract lists exactly the real actions")

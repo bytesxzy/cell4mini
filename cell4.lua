@@ -211,6 +211,17 @@ end
 
 -- Confidence decays over time so stale beliefs stop dominating decisions
 -- without being forgotten outright. halfLife is in clock units.
+function Memory:forget(key)
+	self.beliefs[key] = nil
+end
+
+-- Drops recent observations while keeping beliefs. Used at an episode
+-- boundary: telemetry from a previous life must not be averaged into the
+-- new one, but learned beliefs may legitimately outlive a single episode.
+function Memory:clearObservations()
+	self.buffer:clear()
+end
+
 function Memory:recall(key, halfLife)
 	local belief = self.beliefs[key]
 	if not belief then return nil, 0 end
@@ -865,6 +876,7 @@ function Pipeline.new(config)
 	self.experience = RingBuffer.new(config.experienceCapacity or 256)
 	self.pending = nil
 	self.steps = 0
+	self.episode = 1
 	return self
 end
 
@@ -914,9 +926,43 @@ function Pipeline:_closePending(reward, nextState, t)
 	if not self.pending then return end
 	self.pending.reward = reward or 0
 	self.pending.nextFeatures = Utils.copyArray(nextState.featureVector)
+	self.pending.done = false
 	self.pending.closedAt = t
 	self.experience:push(self.pending)
 	self.pending = nil
+end
+
+-- Ends the current episode (death, round end, reset).
+--
+-- This exists because without it the agent's last action of one life gets
+-- recorded as transitioning into the first state of the next life. That is
+-- a transition that never happened, and a value estimator bootstrapping
+-- across it learns that dying leads to respawning - which is exactly
+-- backwards. The final transition is instead closed as terminal
+-- (done = true, no nextFeatures), which is the signal a trainer needs to
+-- stop bootstrapping there and use the final reward as-is.
+--
+-- The boundary also resets what must not leak between lives: the committed
+-- action (so hysteresis doesn't hold an action from a previous life) and
+-- recent observations (so smoothing doesn't average the old life's
+-- telemetry into the new one's). Beliefs written by rules survive, since
+-- knowledge learned in one episode may legitimately carry forward.
+function Pipeline:endEpisode(finalReward)
+	local closed = false
+	if self.pending then
+		self.pending.reward = finalReward or 0
+		self.pending.nextFeatures = nil -- terminal: there is no next state
+		self.pending.done = true
+		self.pending.closedAt = self.now()
+		self.experience:push(self.pending)
+		self.pending = nil
+		closed = true
+	end
+
+	self.episode = self.episode + 1
+	self.memory:forget(LAST_ACTION_KEY)
+	self.memory:clearObservations()
+	return closed
 end
 
 -- rawSignals: table of this tick's world signals.
@@ -987,6 +1033,7 @@ function Pipeline:step(rawSignals, reward)
 	if chosen ~= nil then
 		self.pending = {
 			step = self.steps,
+			episode = self.episode,
 			t = t,
 			features = Utils.copyArray(state.featureVector),
 			action = chosen,
@@ -1043,6 +1090,7 @@ function Pipeline:exportExperience()
 	for i, record in ipairs(self.experience:toArray()) do
 		records[i] = {
 			step = record.step,
+			episode = record.episode,
 			t = record.t,
 			features = record.features,
 			action = record.action,
@@ -1050,6 +1098,9 @@ function Pipeline:exportExperience()
 			confidence = record.confidence,
 			abstained = record.abstained,
 			reward = record.reward,
+			-- done = true means terminal: nextFeatures is absent and a value
+			-- estimator must not bootstrap past this transition.
+			done = record.done,
 			nextFeatures = record.nextFeatures,
 		}
 	end

@@ -126,6 +126,17 @@ Single file, eight internal modules (Lua tables), in dependency order:
   only known after it plays out, each step closes out the *previous* step's
   record — so the buffer only ever holds transitions that actually
   completed. Steps where no action was taken record nothing.
+- **Episode boundaries** (`Pipeline:endEpisode(finalReward)`): without this,
+  the last action of one life is recorded as transitioning into the first
+  state of the next — a transition that never happened, which teaches a
+  bootstrapping value estimator that dying leads to respawning. The final
+  transition is closed as terminal (`done = true`, no `nextFeatures`), which
+  is the signal a trainer needs to stop bootstrapping there. The boundary
+  also resets what must not leak between lives: the committed action (so
+  hysteresis doesn't hold an action from a previous life) and recent
+  observations (so smoothing doesn't average the old life's telemetry into
+  the new one). Beliefs written by rules survive, since knowledge learned in
+  one episode may legitimately carry forward.
 
 ## Verified performance
 
@@ -147,18 +158,14 @@ treat it as a relative baseline rather than a number to quote.
   learned transition model would be strictly more powerful and is a natural
   future use of the recorded experience, but nothing supports that yet.
 - No reward shaping helpers; `reward` is whatever the caller passes in.
-- No memory of *episodes* (resets/deaths). Experience is one continuous
-  stream, which will matter for bootstrapping value estimates in training.
 
 ## Plan for upcoming nights (a plan, not a promise — adjust as reality dictates)
 
-- **Night 3**: Episode boundaries (`Pipeline:endEpisode()`), so transitions
-  don't bridge across a death/reset and teach the model a false transition.
-  This is a prerequisite for correct value bootstrapping and is arguably
-  the biggest remaining correctness gap for training.
 - **Night 4**: Concrete weight interchange format + round-trip test, and a
   matching contract-validation helper (`loadWeights` should be able to
   reject a model whose shape doesn't match the live `trainingContract`).
+  Pairs naturally with a `Pipeline:loadPolicy(contract, weights)` that
+  refuses a model trained against a different feature/action set.
 - **Night 5**: Richer perception — derived/composite features (ratios,
   deltas, time-since-event) declared in the spec, since raw signals alone
   are a weak input representation for a policy.
@@ -255,6 +262,24 @@ and hurt **and** threatened → `flee` at confidence 0.39 versus ~0.88 for
 the clear-cut cases. That the confidence signal drops on a genuine dilemma
 is the evidence that it means something.
 
-Still not started: everything under "Explicitly NOT built yet" above.
-Episode boundaries are the most important of those for training
-correctness, which is why they lead the plan for night 3.
+### Night 3 — 2026-09-05 (same session, continued while the user was away)
+
+Brought forward from the night-3 plan: **episode boundaries**, the largest
+remaining correctness gap for training. `Pipeline:endEpisode(finalReward)`
+closes the outstanding transition as terminal (`done = true`, no
+`nextFeatures`) and resets exactly what must not leak between lives — the
+committed action and recent observations — while leaving rule-written
+beliefs intact. Added `Memory:forget` and `Memory:clearObservations` to
+support it; both are load-bearing, not speculative API.
+
+The guarantee is pinned two ways: directly (a death mid-run, asserting the
+new life neither inherits the old commitment nor smooths across the
+boundary), and structurally in the soak, which now dies every 37 ticks and
+asserts across all 64 exported records that an episode never ends without a
+terminal record and a terminal record never sits mid-episode.
+
+Tests: 1284 → **1368 assertions**, all passing. Dead-code audit re-run
+clean before commit.
+
+Still not started: everything under "Explicitly NOT built yet" above — the
+weight interchange format is next and leads the plan for night 4.
