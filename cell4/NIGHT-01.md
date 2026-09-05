@@ -110,6 +110,23 @@ Two real generations end-to-end on the patched build at production settings, exi
 `selftest` still passes. Held-out is served from cache and unchanged at 181/260, so the patch
 does not disturb the acceptance path.
 
+### Edge cases and coverage, checked
+
+    cap=0    seed=1     -> 0 tasks, no error        cap=549   seed=7 -> 549
+    cap=0    seed=nil   -> 0 tasks, no error        cap=550   seed=7 -> 550
+    cap=1    seed=1     -> 1 task                   cap=10000 seed=7 -> 550 (clamped to corpus)
+    cap=20   seed=nil   -> arc1_007bbfb7 first, i.e. the old prefix exactly
+    same seed twice     -> IDENTICAL window (deterministic, so a generation stays reproducible)
+    seed 42 vs 43       -> DIFFERENT windows (it really does rotate)
+
+    coverage over 200 generations at cap=20: 550/550 distinct tasks drawn,
+    per-task draws min=1 max=16
+
+The last line is the property that matters: the window is not merely different each generation,
+it genuinely sweeps the corpus. At the cron cadence in `run-once.sh` (every 30 min, ~48
+generations/day) the whole 550-task corpus is covered in under two weeks, and the cumulative
+coverage counter makes that progress legible without ever comparing two different samples.
+
 ## 4. Why the self-improvement loop has accepted 0 of 76 candidates
 
 Investigated separately and **the acceptance rule is not the problem**. Pooled over every
