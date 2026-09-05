@@ -140,14 +140,53 @@ programs is found first. A different program generalises differently to the held
 example, essentially at random. Three lineage rows (gens 57, 66, 68) show `nodes_ratio` exactly
 1.0 alongside 10 wins and 10 losses: identical work, different program chosen.
 
-This makes tie-breaking the highest-leverage change available, and it needs no training:
-collect the train-consistent programs found within a small extra budget and select by a
-principled criterion (lowest cost / Occam, or agreement among several programs on the test
-input) instead of taking the first. It should raise generalisation *and* cut the churn — and
-cutting churn drops the acceptance bar from +4.62pp to as low as +1.92pp, which is what would
-let the RSI loop start moving again. This is also the system's own declared, never-implemented
-gap: *"program merging / multi-program — combine partially-correct programs instead of
-discarding them"*.
+Worse, the alternatives are not merely ignored — they are **structurally invisible**. The
+observational-equivalence dedup keys on the signature of a program's outputs over the *training
+inputs*:
+
+```lua
+local key = ty .. "|" .. table.concat(parts, ";")
+if seen[key] then return nil end
+seen[key] = true
+```
+
+Every train-consistent program produces exactly the training targets, so all of them collapse to
+one key. The first is returned; any later one is discarded as a duplicate before it is ever
+compared. Collecting alternatives requires a deliberate exemption at the target key.
+
+## 4a. How much is that worth? Measured, and the answer differs by benchmark
+
+`evaluate.run` already records `overfit_train` — the solver returned a program fitting every
+training example that then failed the test example. Running that over both benchmarks
+(`bench/measure_overfit.lua`) decomposes the failures:
+
+| | held-out (260, production budget) | real ARC (550, nodes=2500 s=4) |
+| --- | --- | --- |
+| solved | 181 (69.6%) | 46 (8.4%) |
+| **train-consistent but wrong** | **15 (5.8%; 19.0% of failures)** | **2 (0.4%; 0.4% of failures)** |
+| no program in reach at all | 64 (24.6%) | 502 (91.3%) |
+
+**The two benchmarks fail for entirely different reasons, and this is the most important fact of
+the night.**
+
+- On its own generated families, roughly one failure in five is a **selection** failure: a
+  correct program was within reach and the search picked a wrong sibling. Ceiling for better
+  selection: +5.8pp. That is above the +1.92pp acceptance floor and within reach of the +4.62pp
+  bar — so fixing selection is the lever that would **unstick the RSI loop**, both by adding real
+  gain and by cutting the churn that currently raises the bar.
+- On real ARC, selection is almost irrelevant: **91.3% of tasks have no consistent program in
+  reach at any budget**. Nothing about choosing better among consistent programs helps there.
+  This independently reproduces the system's own recorded finding that failures are
+  *"reach-limited, not ordering-limited"* (13× the node budget bought +4.4pp).
+
+So there are two distinct levers, and they must not be confused:
+
+1. **To unstick self-improvement** → better selection among train-consistent programs
+   (the declared, never-implemented gap *"program merging / multi-program"*). Bounded upside on
+   held-out: +5.8pp.
+2. **To improve reasoning on real ARC** → **DSL reach**. Expressiveness, not search. This is the
+   lever the original request is really about, and it is gated on the genome-migration problem in
+   §5, because DSL changes do not reach an evolved genome.
 
 ## 5. A constraint that governs everything shipped from here
 
@@ -183,8 +222,10 @@ Both are real; neither explains any of the 76 rejections; both change the eviden
 ## 7. Open / unverified
 
 - Whether the churn is inherent to bottom-up enumeration or specific to certain operators. The
-  first-solution-wins mechanism above is confirmed in code; its share of the churn is not yet
-  quantified. **This is night 2's first experiment.**
+  first-solution-wins mechanism and the OE collapse are both confirmed in code, and the 15
+  train-consistent-but-wrong held-out tasks bound the selection prize — but I have *not* yet
+  measured how many distinct consistent programs a task actually admits, nor whether a majority
+  vote among them beats the first-found. That needs the OE exemption and is not done.
 - Whether any operator could in principle reach +5pp. 76 samples with best +2.69pp bound this
   weakly at most.
 - The regression-trap arithmetic is a projection from current churn, not an observation — no
@@ -198,8 +239,18 @@ Both are real; neither explains any of the 76 rejections; both change the eviden
 
 ## 8. Next
 
-1. Quantify how often a task admits several train-consistent programs, and how often they
-   disagree on the test example. That measurement decides the size of the tie-breaking prize.
-2. Implement selection-among-consistent-programs, measure on held-out **and** on real ARC.
-3. Build the kernel-primitive adoption operator, so DSL work can reach an evolved genome at all.
-4. Only then: object-centric primitives, bucket-scoped, justified by counts from the unsolved set.
+Ordered by what the measurements above actually support.
+
+1. **Characterise the 502 out-of-reach ARC tasks.** This is where 91.3% of the real-ARC failure
+   lives, so it is where reasoning gains have to come from. Deliverable: a table of candidate
+   primitives with, for each, the number of currently-unsolved tasks it would bring within a
+   depth ≤ 3 composition. Counts, not intuition — and bucket-scoped, since the system already
+   measured unconditional primitive additions at −2.7pp.
+2. **Build the kernel-primitive adoption operator.** Nothing in (1) can reach a running server
+   without it (§5). Shaped as a mutation operator so new primitives still face the acceptance
+   test rather than bypassing the evidence discipline.
+3. **Selection among train-consistent programs**, measured on held-out and ARC separately. Worth
+   up to +5.8pp on held-out and ~0 on ARC, but its real value is cutting the churn that keeps the
+   acceptance bar at +4.62pp. Requires exempting the target key from OE dedup (§4).
+4. Recommend a decision on the two latent defects in §6 — they need the owner's call, since both
+   touch the evidential bar.
