@@ -186,24 +186,149 @@ training example that then failed the test example. Running that over both bench
 **The two benchmarks fail for entirely different reasons, and this is the most important fact of
 the night.**
 
-- On its own generated families, roughly one failure in five is a **selection** failure: a
-  correct program was within reach and the search picked a wrong sibling. Ceiling for better
-  selection: +5.8pp. That is above the +1.92pp acceptance floor and within reach of the +4.62pp
-  bar — so fixing selection is the lever that would **unstick the RSI loop**, both by adding real
-  gain and by cutting the churn that currently raises the bar.
+- On its own generated families, roughly one failure in five *looks* like a **selection**
+  failure: a program consistent with training was found and it was the wrong one. See §4b — when
+  probed, most of these turn out to be reach failures in disguise.
 - On real ARC, selection is almost irrelevant: **91.3% of tasks have no consistent program in
   reach at any budget**. Nothing about choosing better among consistent programs helps there.
   This independently reproduces the system's own recorded finding that failures are
   *"reach-limited, not ordering-limited"* (13× the node budget bought +4.4pp).
 
-So there are two distinct levers, and they must not be confused:
+## 4b. I then tested the selection lever, and it is much weaker than that table suggests
 
-1. **To unstick self-improvement** → better selection among train-consistent programs
-   (the declared, never-implemented gap *"program merging / multi-program"*). Bounded upside on
-   held-out: +5.8pp.
-2. **To improve reasoning on real ARC** → **DSL reach**. Expressiveness, not search. This is the
-   lever the original request is really about, and it is gated on the genome-migration problem in
-   §5, because DSL changes do not reach an evolved genome.
+Rather than assume those 15 tasks were recoverable, I probed them
+(`bench/probe_selection.lua`): re-solve each with the op-cost table jittered — which is exactly
+what a mutation operator does — and see whether any restart returns a program that also satisfies
+the *test* example.
+
+    of 15 wrongly-chosen tasks, a CORRECT program was reachable in 5 (33%)
+    plurality vote across restarts would have been right on 1, wrong on 14
+    ceiling for a perfect selection rule: +1.9pp held-out (5 of 260 tasks)
+
+Two corrections to what I wrote above, both of which cut against the more interesting story:
+
+- **The ceiling is +1.9pp, not +5.8pp.** In 10 of the 15, *no* perturbation produced a correct
+  program: the consistent set simply does not contain the right answer. Those are reach failures
+  wearing a selection failure's clothes. +1.9pp sits exactly on the +1.92pp acceptance floor, so
+  even a perfect selection oracle would only barely clear the bar, and only if it introduced no
+  losses at all.
+- **The obvious implementation actively fails.** Plurality voting across restarts picks correctly
+  in 1 case out of 15. That is not noise, it is a mechanism: the most *frequent* program under
+  cost perturbation is the one the learned cost prior favours, which is the same wrong one. Where
+  a correct sibling exists it is rare, so frequency is anti-correlated with correctness. Any
+  ensemble scheme that weights by agreement would be worse than what the system does today.
+
+So the honest decomposition of held-out failure is not 5.8% selection / 24.6% reach. It is
+roughly **1.9% selection, 28.5% reach** — and on real ARC it is 0.4% / 91.3%.
+
+**Reach is the lever on both benchmarks.** That is the single most useful thing measured tonight,
+and it is the opposite of where the churn evidence alone would have pointed.
+
+Selection is still worth something, but for a different reason than score: a selection rule that
+is *invariant* to cost perturbation (canonical choice among the consistent set) would decouple
+held-out outcomes from enumeration order, which is what the ~25-flip churn is made of. Tasks
+returning one program across all 8 restarts are stable; those returning 4–6 are the churn
+sources. Cutting churn lowers the acceptance bar from +4.62pp toward the +1.92pp floor. That is a
+**stability** argument, not an accuracy one, and it should be made and measured as such.
+
+### The two levers, corrected
+
+1. **To improve reasoning** → **DSL reach**. 91.3% of real ARC and ~28.5% of held-out have no
+   correct program in the consistent set at any budget. This is the lever the original request is
+   about, and it is gated on the genome-migration problem in §5.
+2. **To unstick self-improvement** → **stabilise selection** so mutations stop reshuffling
+   outcomes. Expected gain in score ≈ 0; expected gain in *statistical power* is the point.
+
+## 4c. What reach actually costs: a one-line change worth +4 ARC tasks, and seven primitives worth +27
+
+Since reach is the lever, the question is what to add. Two results.
+
+### The colour pool stops at 5 — verified here, not taken on trust
+
+`rsi/genome/policy.lua:13` reads `consts = { I = { 0, 1, 2, 3 }, C = { 0, 1, 2, 3, 4, 5 } }`, and
+line 18 has `derived_consts = false`. The colour slots of `recolor`, `fill_nonzero`, `add_border`,
+`const_grid` and `count_color` can therefore never receive 6–9. ARC uses ten colours. Tasks
+needing a literal 6, 7 or 8 are outside the hypothesis space at any budget.
+
+I changed that one line to `C = { 0,...,9 }` and re-ran the whole corpus at identical budget:
+
+    baseline           RESULT solved=46 n=550 pct=8.36 partial=0.1216
+    colours 0-9        RESULT solved=50 n=550 pct=9.09 partial=0.1293
+
+**+4 tasks, no losses, one line.** Examples it could not previously write at all:
+`recolor($,#6,#2)` and `recolor($,#7,#5)` — single-op programs.
+
+Note carefully why this was not found by the system itself: `mechanisms.lua` records *"wider
+constant pool — −3.5pp adding integers 4..9"* and so never re-proposes it. That measurement was
+taken on the **synthetic** distribution, where generated values are small and already pooled. It
+does not transfer to ARC, which uses all ten colours. The rejection list is doing its job for the
+benchmark it was measured on, and generalising it to ARC is wrong. Better still would be
+`derived_consts = true`, which mines literals from the task's own I/O pairs; that code path exists
+and is dead today.
+
+**Caveat:** this is a `policy.lua` change, so per §5 it does **not** ship by dropping in a new
+`cell4.lua` — it must be applied to the genome on the server, or proposed by an adoption operator.
+I have not measured its effect on the held-out split, where the −3.5pp precedent suggests it could
+cost something. That measurement must happen before it is adopted permanently.
+
+### Seven primitives put 27 of the 504 unsolved ARC tasks in reach
+
+From an exhaustive sweep over the unsolved set, with each candidate program checked against the
+held-out test pair (26 of the 27 also pass test, not just train):
+
+| primitive | signature | unsolved tasks it reaches |
+| --- | --- | --- |
+| `mask_and` / `mask_or` / `mask_xor` / `mask_nor` | `(G,G,C) -> G` | **14** |
+| `fill_periodic` | `(G,C) -> G` | 6 |
+| `fill_symmetry` + `crop_diff` | `(G,C) -> G`, `(G,G) -> G` | 4 |
+| `fill_holes` | `(G,C) -> G` | 3 |
+
+That is 46/550 → **73/550 (13.3%)**. Worked example, verified on train and test:
+`mask_or(top_half($), bottom_half($), 3)` solves `arc1_ce4f8723` — two panels split by a separator
+row, combined cellwise. The DSL's only two-grid cellwise op is `overlay`, which is an OR that
+keeps colours; there is no AND, XOR or NOR, so that whole ARC family is unreachable.
+
+`fill_holes` is worth calling out because it exposes a structural blind spot rather than a missing
+convenience: `components` (cell4.lua:902) walks **only non-zero cells**
+(`if g[r][c] ~= 0 and not seen[r][c]`). Nothing in the DSL can ask whether a *background* region
+is enclosed, so "colour the inside of every closed shape" is inexpressible at any depth.
+
+### And the honest ceiling on that strategy
+
+196 of the 504 unsolved tasks have ≥3 connected objects in every train input, and 19 need two
+objects in the *same* grid recoloured differently. The catalogue has exactly four object-aware ops
+(`object_count`, `keep_largest`, `keep_smallest`, `largest_object_size`) and **every one collapses
+the object set to a single scalar or a single object**. The type universe is `{B, C, G, I, L}`
+with max arity 3, no function type and no list-of-grids type, so "apply a different function to
+each object depending on its properties" is not a composition of existing primitives at any depth.
+
+That is not a missing primitive, it is a missing *type*. Fixing it means adding a type to the
+catalogue plus `objects`, `sort_objects`, `nth_object`, `paint_objects` and a map combinator —
+touching `def`, the per-type banks in `search.lua`, the OE signature function and the inverse
+tables. **A kernel change, not a genome mutation, which is a large part of why 73 generations of
+genome mutation never found it.** It bounds "add primitives" at roughly 46 → 75–90 of 550.
+
+## 4d. Library learning: proposed correctly, used correctly, and correctly rejected
+
+The library is empty not because the machinery is broken but because there is almost nothing to
+compress. `corpus.jsonl` has 6,136 rows but only **1,333 distinct programs**. Of 1,536 distinct
+eligible subtrees, 211 appear in ≥2 programs and 15 in ≥5; the best single abstraction compresses
+26 of 5,855 corpus nodes (**0.44%**).
+
+Measured A/B on the deterministic held-out split at production budget: champion 181/260; the
+operator's own 4-abstraction bundle 182/260 (3W/2L, sign p=0.500); a maximal hand-built library of
+**all 63** mineable abstractions 186/260 (13W/8L, p=0.192). Acceptance needs at minimum 5W/0L or
+15W/6L. **Nothing the corpus can yield clears the bar.**
+
+On real ARC, seven library configurations were measured and every one scored exactly 46/550 —
+the abstractions are bucket-scoped to non-`G>G` buckets while all 550 ARC tasks are `G>G`.
+
+Four real defects sit on top of that ceiling, worth fixing but not worth expecting much from:
+`near_miss_abstraction` drops the bucket field, so it can only ever produce the unconditional
+additions the system itself measured at −2.7pp; `parameterized_abstraction` is subsumed by the
+backward bank (with `bidirectional=false` its abstractions appear in 5 solutions, with it on, 0);
+learned ops have no inverse rules so they are excluded from the bidirectional search; and
+`library_learn` bundles four abstractions per candidate, mixing a +2 with a −1.
 
 ## 5. A constraint that governs everything shipped from here
 
@@ -247,8 +372,19 @@ Both are real; neither explains any of the 76 rejections; both change the eviden
   weakly at most.
 - The regression-trap arithmetic is a projection from current churn, not an observation — no
   acceptance has ever occurred.
-- What the 504 unsolved ARC tasks actually require, primitive by primitive. Analysis in flight;
-  not reported here because it is not yet verified.
+- **The §4c and §4d numbers did not get an independent adversarial check.** The analysis session
+  hit its limit before the verification pass ran, so of those results only the colour-pool
+  measurement (46 → 50) was re-run by me from scratch. The seven-primitive table, the 27-task
+  figure and the library A/B numbers come from a single careful pass with cited evidence and
+  quoted commands, but nobody tried to refute them. **Treat §4c and §4d as strong leads, not as
+  settled fact** — re-deriving them is the first item of night 2, before any code is written
+  against them.
+- The 27-task figure is explicitly a *lower* bound: it came from a hand-written candidate program
+  space, not an exhaustive depth ≤ 3 enumeration over the extended DSL (that run was killed after
+  stalling on large grids).
+- No proposed primitive was proved inexpressible at unbounded depth. What was shown is weaker but
+  decisive in practice: at 40× the production budget with the colour pool widened, the existing
+  DSL solved 4 of 35 candidate tasks, and all four were colour-literal cases.
 - The system's own record says failures are *reach-limited, not ordering-limited*
   ("13x the node budget bought only +4.4pp"), and that unconditional library additions cost
   −2.7pp because every extra primitive widens branching everywhere. Any new DSL primitive must
@@ -266,8 +402,9 @@ Ordered by what the measurements above actually support.
 2. **Build the kernel-primitive adoption operator.** Nothing in (1) can reach a running server
    without it (§5). Shaped as a mutation operator so new primitives still face the acceptance
    test rather than bypassing the evidence discipline.
-3. **Selection among train-consistent programs**, measured on held-out and ARC separately. Worth
-   up to +5.8pp on held-out and ~0 on ARC, but its real value is cutting the churn that keeps the
-   acceptance bar at +4.62pp. Requires exempting the target key from OE dedup (§4).
+3. **Canonical selection, for stability rather than score** (§4b). Expect ~0 score; the point is
+   decoupling outcomes from enumeration order to cut the churn that keeps the acceptance bar at
+   +4.62pp. Requires exempting the target key from OE dedup. Do **not** build an
+   agreement-weighted ensemble — measured right on 1 of 15.
 4. Recommend a decision on the two latent defects in §6 — they need the owner's call, since both
    touch the evidential bar.

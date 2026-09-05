@@ -26,7 +26,8 @@ sign test. There is no neural network anywhere, by design.
 | Real ARC corpus | **46/550 (8.36%)** | night 1 §1 |
 | Real ARC as the system reported it | 0/20 for 67 generations | **instrument defect**, fixed night 1 |
 | Candidates accepted | **0 of 76** across 73 generations | night 1 §4 |
-| Learned library | empty (`return {}`) after 6,136 solved programs | under investigation |
+| Learned library | empty after 6,136 rows / **1,333 distinct** programs | night 1 §4d — correctly rejected, nothing to compress |
+| ARC with colour literals 6-9 enabled | **50/550 (9.09%)**, +4, no losses | night 1 §4c — one line in `policy.lua` |
 
 ## Where the failures actually are
 
@@ -36,21 +37,36 @@ sends the work in the wrong direction.
 | failure mode | held-out (260) | real ARC (550) | what fixes it |
 | --- | --- | --- | --- |
 | solved | 181 (69.6%) | 46 (8.4%) | — |
-| a consistent program was found, but the **wrong** one | 15 (5.8%) | 2 (0.4%) | better **selection** |
+| a consistent program was found, but the **wrong** one | 15 (5.8%) | 2 (0.4%) | see below |
 | **no** consistent program in reach at any budget | 64 (24.6%) | **502 (91.3%)** | more **reach** (DSL) |
+
+The middle row was probed rather than assumed (`bench/probe_selection.lua`): re-solve each such
+task with the op-cost table jittered, as a mutation would, and see whether any restart yields a
+program that also satisfies the test example. **Only 5 of the 15 have a correct sibling in reach
+at all**; the other 10 are reach failures wearing a selection failure's clothes. So the real
+held-out split is closer to **1.9% selection, 28.5% reach**.
 
 Two independent levers:
 
-**Lever A — selection.** The search returns the *first* program consistent with the training
-examples. Alternatives are not just ignored, they are invisible: OE dedup keys on the train-output
-signature and every train-consistent program shares it, so all but the first collapse to one key.
-Because every mutation operator works by changing enumeration *order*, a mutation changes *which*
-sibling is returned — which is why candidates flip ~25 of 260 held-out outcomes (9.6%) with mean
-net −1.04, and why 0 of 76 were ever accepted. Fixing selection is worth up to +5.8pp on held-out
-and, more importantly, **cuts the churn that holds the acceptance bar at +4.62pp** (the floor is
-+1.92pp at zero losses). This is the lever that unsticks self-improvement.
+**Lever A — selection, and it is weaker than it looks.** The search returns the *first* program
+consistent with the training examples. Alternatives are not just ignored, they are invisible: OE
+dedup keys on the train-output signature and every train-consistent program shares it, so all but
+the first collapse to one key. Because every mutation operator works by changing enumeration
+*order*, a mutation changes *which* sibling is returned — which is why candidates flip ~25 of 260
+held-out outcomes (9.6%) with mean net −1.04.
 
-**Lever B — reach.** 91.3% of real ARC tasks have no consistent program at all. The system's own
+Measured ceiling for a perfect selection rule: **+1.9pp**, sitting exactly on the +1.92pp
+acceptance floor. And plurality voting across restarts is right on **1 of 15** — the most frequent
+program under perturbation is the one the cost prior favours, i.e. the same wrong one, so
+agreement is anti-correlated with correctness. Ensemble schemes would be worse than today.
+
+Selection is therefore a **stability** lever, not an accuracy one: a rule that picks canonically
+among the consistent set would decouple outcomes from enumeration order, cutting the churn that
+holds the acceptance bar at +4.62pp instead of the +1.92pp floor. Worth doing to restore
+statistical power, not to raise the score.
+
+**Lever B — reach, and it dominates both benchmarks.** 91.3% of real ARC tasks — and, after the
+probe above, ~28.5% of held-out — have no correct program in reach at all. The system's own
 records agree: *"13× the node budget bought only +4.4pp; the remaining failures are reach-limited,
 not ordering-limited"*, and `max_cost` 9→24 was bit-for-bit identical. **No amount of search
 tuning or compute touches this.** Only DSL expressiveness does. This is the lever that improves
@@ -65,7 +81,12 @@ real reasoning.
    system's evidence discipline — is a *mutation operator* that proposes adopting new kernel
    primitives, so they still face the acceptance test. `restore_op` is the nearest existing
    operator but only restores previously-dropped ops, so this is genuinely new.
-2. **Primitives must be introduced bucket-scoped.** The system measured unconditional library
+2. **The residual needs a new TYPE, not new primitives.** 196 of the 504 unsolved ARC tasks have
+   ≥3 connected objects per input; the four object-aware ops all collapse the object set to one
+   scalar or one object, and the type universe `{B,C,G,I,L}` has no list-of-grids type and no map
+   combinator. Per-object heterogeneous reasoning is therefore inexpressible at any depth. This
+   bounds "add primitives" at roughly 46 → 75-90 of 550, and it is a kernel change.
+3. **Primitives must be introduced bucket-scoped.** The system measured unconditional library
    additions at **−2.7pp** for 8 abstractions: every extra primitive widens branching at every
    level. `policy.cond_ops` (per-feature-bucket whitelists) already exists and is the correct
    vehicle. A new primitive that helps 20 grid tasks must not be paid for by every list task.
@@ -77,16 +98,18 @@ Ordered so that each step unblocks the next, and so nothing ships without eviden
 - **N1 — make the benchmark tell the truth.** *Done.* Rotating, stratified, digest-keyed ARC
   window; cumulative coverage. Without this, no ARC-directed change could ever have been measured,
   and the anti-overfitting guard in acceptance clause 2 was inert.
-- **N2 — characterise the 502.** For each candidate primitive, the number of currently-unsolved
-  ARC tasks it would bring within a depth ≤ 3 composition. Counts, not intuition. This is the
-  only honest way to choose what to add.
+- **N2 — characterise the 502.** *Largely done, but unverified* (night 1 §4c). Seven primitives
+  reach 27 of the 504: `mask_and/or/xor/nor (G,G,C)->G` (14), `fill_periodic (G,C)->G` (6),
+  `fill_symmetry` + `crop_diff` (4), `fill_holes (G,C)->G` (3) — 46/550 → 73/550. The
+  verification pass never ran, so **night 2 starts by re-deriving these**, not by coding them.
+  Separately: widening the colour pool to 0-9 is +4 ARC for one line, measured twice.
 - **N3 — the adoption operator.** Kernel-side mutation operator that proposes newly-catalogued
   primitives, bucket-scoped, through the normal acceptance test. Prerequisite for N4.
 - **N4 — add primitives, smallest set first**, justified by N2's counts, measured on real ARC and
   on held-out separately.
-- **N5 — selection among consistent programs.** Requires exempting the target key from OE dedup.
-  Measure: held-out delta, ARC delta, and the change in churn (wins/losses spread), since the
-  churn reduction is the point.
+- **N5 — canonical selection, for stability not score.** Requires exempting the target key from
+  OE dedup. Measure the change in churn (wins/losses spread per candidate), which is the point;
+  do **not** expect score, and do not build an agreement-weighted ensemble — measured at 1/15.
 - **Ongoing** — the two latent acceptance defects in night 1 §6 need the owner's decision,
   because both touch the evidential bar that `config.lua` marks as deliberately not tunable.
 
@@ -99,4 +122,13 @@ Ordered so that each step unblocks the next, and so nothing ships without eviden
   changes the data says are bad. The generator is the bottleneck, not the judge.
 - Evaluation is bit-deterministic at the production budget, so candidate churn is real
   behavioural change and cannot be averaged away by repeated runs.
+- Selection is not an accuracy lever: perfect selection is +1.9pp, and plurality voting across
+  restarts is right on 1 of 15 because agreement is anti-correlated with correctness.
+- Library learning is not fixable by tuning. Only 1,333 distinct programs exist in a 6,136-row
+  corpus; the best abstraction compresses 0.44% of nodes, and even a maximal 63-entry library is
+  186/260 (13W/8L, p=0.192) — short of the bar, and exactly 46/550 on ARC. The machinery works;
+  there is nothing to compress.
+- The `rejected` list in `mechanisms.lua` is scoped to the synthetic distribution and must not be
+  generalised to ARC. "Wider constant pool: -3.5pp" was measured on generated tasks with small
+  pooled values; on ARC, which uses ten colours, widening the pool is +4 with no losses.
 - No neural component. Excluded by design, and nothing above needs one.
