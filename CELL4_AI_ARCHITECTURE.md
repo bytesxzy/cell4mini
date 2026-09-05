@@ -73,6 +73,13 @@ Single file, eight internal modules (Lua tables), in dependency order:
    tested before a trained model exists); `loadWeights` validates shape
    *and* rejects non-numeric/NaN values; `describe()` reports the exact
    shape the trainer must produce; `forward()` runs the pass.
+4b. **PolicyFormat** — the trainer ↔ runtime interchange: a line-based text
+   format carrying the training contract alongside the weights. Parsed by
+   hand, deliberately **not** a Lua chunk run through `load()` (that would
+   execute whatever arrives, and Roblox disables `loadstring` anyway) and
+   deliberately not JSON (no library, no host-specific API needed). Malformed
+   input returns `(nil, reason)` rather than raising — a bad model file is an
+   expected condition. `tools/export_policy.py` is the trainer-side half.
 5. **Perception** — `normalize(raw, spec)` produces
    `{named, featureVector, raw, predicted}`: a name-keyed table for rule
    authors and a fixed-order vector for the network, from one declarative
@@ -146,12 +153,24 @@ on. The planner dominates that cost (up to `beam × actions × depth` state
 evaluations per step). Measured, not estimated — but on a dev container, so
 treat it as a relative baseline rather than a number to quote.
 
+## How to actually train against this
+
+1. Build the pipeline (spec, goals, rules, planner) and run the agent.
+2. `pipeline:policyTemplate({16, 16})` → the exact input order, action order
+   and layer shape your trainer must produce.
+3. `pipeline:exportExperience()` → `{contract, records}` where each record is
+   `(features, action, actionIndex, reward, nextFeatures, done, episode)`.
+   Ship those to the training servers. `done = true` means terminal: no
+   `nextFeatures`, do not bootstrap past it.
+4. Train off-box. Nothing in this repo does that, by design.
+5. Export with `tools/export_policy.py` → a `.cell4` text file.
+6. `pipeline:loadPolicy(text)` → `true`, or `false, reason` if the model's
+   features or actions have drifted from the runtime. **A refusal is the
+   system working.** Don't hand-edit the header to get past it; regenerate
+   against the current template instead.
+
 ## Explicitly NOT built yet
 
-- No serialization format between the trainer and `NeuralNet:loadWeights`.
-  It accepts a plain Lua table today, format-agnostic on purpose. The
-  decision (JSON over HttpService? a Roblox DataStore blob? a flat string?)
-  depends on how the servers will ship weights to the runtime.
 - No integration with a real game loop or real signal sources — every test
   drives synthetic signals.
 - `Planner` uses hand-written `effects` functions as its world model. A
@@ -161,11 +180,6 @@ treat it as a relative baseline rather than a number to quote.
 
 ## Plan for upcoming nights (a plan, not a promise — adjust as reality dictates)
 
-- **Night 4**: Concrete weight interchange format + round-trip test, and a
-  matching contract-validation helper (`loadWeights` should be able to
-  reject a model whose shape doesn't match the live `trainingContract`).
-  Pairs naturally with a `Pipeline:loadPolicy(contract, weights)` that
-  refuses a model trained against a different feature/action set.
 - **Night 5**: Richer perception — derived/composite features (ratios,
   deltas, time-since-event) declared in the spec, since raw signals alone
   are a weak input representation for a policy.
@@ -281,5 +295,52 @@ terminal record and a terminal record never sits mid-episode.
 Tests: 1284 → **1368 assertions**, all passing. Dead-code audit re-run
 clean before commit.
 
-Still not started: everything under "Explicitly NOT built yet" above — the
-weight interchange format is next and leads the plan for night 4.
+Still not started: everything under "Explicitly NOT built yet" above.
+
+### Night 4 — 2026-09-05 (same session, continued while the user was away)
+
+Closed the loop between the training servers and the runtime.
+
+- **`PolicyFormat`** (module 4b above) — encode/decode for the interchange
+  format, with a hand-written parser that only ever reads numbers and names.
+  Malformed input returns `(nil, reason)`; a test feeds it a line containing
+  `sabotage()` to pin that nothing in a model file is ever executed.
+- **`Pipeline:loadPolicy(textOrBundle)`** — the part that actually matters.
+  A model whose feature order or action set has drifted still produces
+  numbers; they just mean something else now, which yields an agent that is
+  confidently wrong. Loading is refused unless features match the perception
+  spec exactly in order, actions match the runtime's action set exactly in
+  order, and the layer shape chains from `#features` to `#actions`. Each
+  refusal names the specific drift. A rejected load leaves any
+  already-working policy untouched (tested).
+- **`Pipeline:policyTemplate(hiddenSizes)`** — hands the trainer the exact
+  contract to build against, so the refusal above is avoidable rather than
+  a guessing game.
+- **`tools/export_policy.py`** — dependency-free reference exporter for the
+  trainer side, which validates shapes there too and preserves full float
+  precision (`repr()`, which round-trips a double exactly — quantizing on
+  export is silent model drift).
+- **Cross-language contract test** — `tests/fixtures/golden_policy.cell4` is
+  produced by the Python exporter and parsed by the Lua suite, with both
+  sides checking it independently. Verified end-to-end for real, not
+  assumed: Python wrote a policy, Lua validated and loaded it, and the
+  policy measurably drove the decision (0.972 weight on `flee` at threat 95).
+- **`tests/run_all.sh`** runs both suites.
+
+**Bug found and fixed, and this one was live.** The golden fixture carries a
+weight of 123456.75, and loading it produced NaN. Cause: `Utils.tanh` used
+the naive `(e^2x - 1)/(e^2x + 1)`, which overflows to `inf/inf = NaN` for
+large inputs instead of saturating to 1. One NaN activation propagates
+through the whole forward pass and destroys every decision downstream — and
+large weights are exactly what training produces, so this would have
+detonated on the first real model rather than on any toy example. Rewritten
+to branch on the sign so the exponent stays negative and underflows
+harmlessly. All activations are now pinned at ±1e300 against both NaN and
+range violations, plus a full forward pass with 1e9 weights.
+
+That bug is the argument for testing with realistic values: every earlier
+test used weights around 1, and all of them passed against the broken
+implementation.
+
+Tests: 1368 → **1468 Lua assertions + 9 Python**, all passing. Dead-code
+audit clean.

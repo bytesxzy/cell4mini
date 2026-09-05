@@ -135,6 +135,29 @@ tanhNet:loadWeights({ layers = { { weights = { {1} }, biases = {0} } } })
 assertNear(tanhNet:forward({0})[1], 0, 1e-9, "tanh(0) = 0")
 assertNear(tanhNet:forward({1})[1], 0.7615941559, 1e-9, "tanh(1) matches the reference value")
 assertNear(tanhNet:forward({-1})[1], -0.7615941559, 1e-9, "tanh is odd-symmetric")
+-- Activations must saturate at extremes, never overflow to NaN. A single
+-- NaN activation propagates through the pass and destroys every decision
+-- downstream, and large weights are exactly what training produces.
+for _, extreme in ipairs({1e3, 1e6, 1e300, -1e3, -1e6, -1e300}) do
+	local t = Cell4.Utils.tanh(extreme)
+	assertTrue(t == t, ("tanh(%g) is not NaN"):format(extreme))
+	assertTrue(t >= -1 and t <= 1, ("tanh(%g) stays in [-1,1]"):format(extreme))
+	local s = Cell4.Utils.sigmoid(extreme)
+	assertTrue(s == s, ("sigmoid(%g) is not NaN"):format(extreme))
+	assertTrue(s >= 0 and s <= 1, ("sigmoid(%g) stays in [0,1]"):format(extreme))
+end
+assertNear(Cell4.Utils.tanh(1e6), 1, 1e-12, "tanh saturates to +1")
+assertNear(Cell4.Utils.tanh(-1e6), -1, 1e-12, "tanh saturates to -1")
+assertNear(Cell4.Utils.sigmoid(1e6), 1, 1e-12, "sigmoid saturates to 1")
+assertNear(Cell4.Utils.sigmoid(-1e6), 0, 1e-12, "sigmoid saturates to 0")
+-- A whole forward pass with weights big enough to overflow the naive form.
+local hugeNet = Cell4.NeuralNet.new({1, 1, 1}, "tanh", "tanh")
+hugeNet:loadWeights({
+	layers = { { weights = { {1e9} }, biases = {0} }, { weights = { {1e9} }, biases = {0} } },
+})
+local hugeOut = hugeNet:forward({1})[1]
+assertTrue(hugeOut == hugeOut, "a forward pass with huge weights produces no NaN")
+assertNear(hugeOut, 1, 1e-12, "huge weights saturate rather than blowing up")
 
 -- =====================================================================
 -- Perception
@@ -590,6 +613,180 @@ assertTrue(explanation:find("plan:"), "explain() shows the plan")
 assertTrue(explanation:find("1%."), "explain() ranks the alternatives")
 assertTrue(explanation:find("ABSTAINED") == nil, "explain() only flags abstention when it happened")
 assertTrue(abstaining:explain(abstained):find("ABSTAINED"), "explain() flags abstention when it did happen")
+
+-- =====================================================================
+-- PolicyFormat: the trainer <-> runtime interchange.
+-- =====================================================================
+local PF = Cell4.PolicyFormat
+local sampleBundle = {
+	features = { "threat", "health" },
+	actions = { "explore", "flee" },
+	activation = "tanh",
+	outputActivation = "linear",
+	layers = {
+		{ weights = { {0.5, -0.25}, {1e-8, 123456.75}, {0, 1} }, biases = {0.1, -0.2, 0.3} },
+		{ weights = { {1, 2, 3}, {-1, -2, -3} }, biases = {0, 0.5} },
+	},
+}
+local encoded = PF.encode(sampleBundle)
+local decoded, decodeErr = PF.decode(encoded)
+assertTrue(decoded ~= nil, "round-trip decodes: " .. tostring(decodeErr))
+assertEq(table.concat(decoded.features, ","), "threat,health", "features round-trip")
+assertEq(table.concat(decoded.actions, ","), "explore,flee", "actions round-trip")
+assertEq(decoded.activation, "tanh", "activation round-trips")
+assertEq(decoded.outputActivation, "linear", "output activation round-trips")
+assertEq(#decoded.layers, 2, "layer count round-trips")
+assertEq(table.concat(decoded.layerSizes, ","), "2,3,2", "layer shape is derived from the weights")
+-- Exact float round-trip matters: quantization here is silent model drift.
+assertEq(decoded.layers[1].weights[2][2], 123456.75, "large values round-trip exactly")
+assertEq(decoded.layers[1].weights[2][1], 1e-8, "small values round-trip exactly")
+assertEq(decoded.layers[1].weights[1][2], -0.25, "negative values round-trip exactly")
+assertEq(decoded.layers[2].biases[2], 0.5, "biases round-trip exactly")
+assertEq(PF.encode(decoded), encoded, "re-encoding a decoded bundle is byte-identical")
+
+-- Cross-language contract: this fixture is produced by the Python exporter
+-- in tools/export_policy.py (and pinned byte-for-byte by
+-- tests/test_export_policy.py). Parsing it here is what proves the trainer
+-- side and the runtime side actually agree, rather than each being
+-- self-consistently wrong.
+local goldenFile = io.open(scriptDir .. "fixtures/golden_policy.cell4", "r")
+assertTrue(goldenFile ~= nil, "the golden policy fixture exists")
+local goldenText = goldenFile:read("*a")
+goldenFile:close()
+local golden, goldenErr = PF.decode(goldenText)
+assertTrue(golden ~= nil, "the exporter's output parses here: " .. tostring(goldenErr))
+assertEq(table.concat(golden.features, ","), "threat,health", "golden features match")
+assertEq(table.concat(golden.actions, ","), "explore,flee", "golden actions match")
+assertEq(table.concat(golden.layerSizes, ","), "2,3,2", "golden shape matches")
+assertEq(golden.activation, "tanh", "golden activation matches")
+-- The values Python wrote must arrive here as the identical doubles.
+assertEq(golden.layers[1].weights[2][1], 1e-08, "tiny value survives the language boundary")
+assertEq(golden.layers[1].weights[2][2], 123456.75, "large value survives the language boundary")
+assertEq(golden.layers[1].weights[1][2], -0.25, "negative value survives the language boundary")
+assertEq(golden.layers[2].biases[2], 0.5, "bias survives the language boundary")
+-- And it must actually run as a network.
+local goldenNet = Cell4.NeuralNet.new(golden.layerSizes, golden.activation, golden.outputActivation)
+goldenNet:loadWeights({ layers = golden.layers })
+local goldenOut = goldenNet:forward({0.5, 0.5})
+assertEq(#goldenOut, 2, "the imported policy produces one output per action")
+assertTrue(goldenOut[1] == goldenOut[1], "the imported policy produces real numbers")
+
+-- Comments and blank lines are ignored.
+local withComments = PF.decode("# a trained policy\ncell4-policy 1\n\nfeatures a\nactions x\n"
+	.. "activation relu linear\nlayer 1 1\nw 1  # the only weight\nb 0\n")
+assertTrue(withComments ~= nil, "comments and blank lines are ignored")
+
+-- Malformed input must be reported, never raised, and never executed.
+local badCases = {
+	{ "", "empty file" },
+	{ "features a\nactions x\n", "missing version header" },
+	{ "cell4-policy 99\n", "unsupported version" },
+	{ "cell4-policy 1\nfeatures a\nactions x\n", "no layers" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 1\nw 1\n", "missing bias line" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 2\nw 1\nb 0 0\n", "too few w lines" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 2 1\nw 1\nb 0\n", "w line too short" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 1\nw 1 2\nb 0\n", "w line too long" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 1\nw notanumber\nb 0\n", "non-numeric weight" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nw 1\n", "w outside a layer" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 1\nw 1\nb 0\nb 0\n", "duplicate bias line" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 1\nsabotage()\n", "unknown keyword" },
+	{ "cell4-policy 1\nfeatures a\nactions x\nlayer 1 2\nw 1\nw 1\nb 0 0\nlayer 1 1\nw 1\nb 0\n",
+		"layer shapes that do not chain" },
+}
+for _, case in ipairs(badCases) do
+	local result, err = PF.decode(case[1])
+	assertEq(result, nil, "rejects " .. case[2])
+	assertTrue(type(err) == "string" and #err > 0, "explains rejection of " .. case[2])
+end
+assertEq(PF.decode(42), nil, "non-string input is rejected")
+
+-- =====================================================================
+-- Contract-validated policy loading
+-- =====================================================================
+local loaderReasoning = Cell4.Reasoning.new()
+loaderReasoning:registerRule("explore", 1, function() return 0.3, "baseline" end)
+loaderReasoning:registerRule("flee", 1, function() return 0.3, "baseline" end)
+local loaderPipeline = Cell4.Pipeline.new({
+	perceptionSpec = spec, reasoning = loaderReasoning, clock = fakeClock,
+})
+
+-- The template tells the trainer exactly what to produce.
+local template = loaderPipeline:policyTemplate({ 8 })
+assertEq(table.concat(template.features, ","), "threat,health", "template lists features in order")
+assertEq(table.concat(template.actions, ","), "explore,flee", "template lists actions in index order")
+assertEq(table.concat(template.layerSizes, ","), "2,8,2", "template pins input and output widths")
+
+local goodPolicy = PF.encode({
+	features = { "threat", "health" },
+	actions = { "explore", "flee" },
+	activation = "relu",
+	outputActivation = "linear",
+	layers = { { weights = { {0, 0}, {5, 0} }, biases = {0, 0} } },
+})
+local okLoad, loadErr = loaderPipeline:loadPolicy(goodPolicy)
+assertEq(okLoad, true, "a matching policy loads: " .. tostring(loadErr))
+fakeTime = fakeTime + 1
+local policyDriven = loaderPipeline:step({ threat = 80, health = 50 })
+assertEq(policyDriven.decision, "flee", "the loaded policy actually influences decisions")
+
+-- Every mismatch that would silently produce a confidently-wrong agent.
+local rejections = {
+	{
+		why = "feature order drift",
+		text = PF.encode({
+			features = { "health", "threat" }, -- swapped
+			actions = { "explore", "flee" },
+			layers = { { weights = { {0, 0}, {0, 0} }, biases = {0, 0} } },
+		}),
+		expect = "feature mismatch",
+	},
+	{
+		why = "a feature the runtime no longer perceives",
+		text = PF.encode({
+			features = { "threat", "health", "ammo" },
+			actions = { "explore", "flee" },
+			layers = { { weights = { {0, 0, 0}, {0, 0, 0} }, biases = {0, 0} } },
+		}),
+		expect = "feature mismatch",
+	},
+	{
+		why = "an action the runtime cannot take",
+		text = PF.encode({
+			features = { "threat", "health" },
+			actions = { "explore", "teleport" },
+			layers = { { weights = { {0, 0}, {0, 0} }, biases = {0, 0} } },
+		}),
+		expect = "action mismatch",
+	},
+	{
+		why = "a policy missing an action the agent has",
+		text = PF.encode({
+			features = { "threat", "health" },
+			actions = { "explore" },
+			layers = { { weights = { {0, 0} }, biases = {0} } },
+		}),
+		expect = "action mismatch",
+	},
+}
+for _, case in ipairs(rejections) do
+	local accepted, reason = loaderPipeline:loadPolicy(case.text)
+	assertEq(accepted, false, "rejects " .. case.why)
+	assertTrue(reason:find(case.expect), "rejection of " .. case.why .. " names the cause: " .. tostring(reason))
+end
+
+local garbageOk, garbageReason = loaderPipeline:loadPolicy("not a policy at all")
+assertEq(garbageOk, false, "rejects unparseable input")
+assertTrue(garbageReason:find("could not parse"), "unparseable input is reported as a parse failure")
+assertEq((loaderPipeline:loadPolicy(42)), false, "rejects a non-string, non-bundle argument")
+
+-- A rejected load must leave the previously working policy untouched.
+fakeTime = fakeTime + 1
+assertEq(loaderPipeline:step({ threat = 80, health = 50 }).decision, "flee",
+	"a rejected load does not disturb the policy already in use")
+
+-- A decoded bundle can be passed directly, without re-serializing.
+local bundleOk = loaderPipeline:loadPolicy(PF.decode(goodPolicy))
+assertEq(bundleOk, true, "an already-decoded bundle loads directly")
 
 -- =====================================================================
 -- Episode boundaries: a transition must never bridge two lives.

@@ -54,10 +54,21 @@ function Utils.relu(x)
 end
 
 function Utils.tanh(x)
-	-- math.tanh was removed in some Lua builds; define it directly so we
-	-- don't depend on which stdlib we're linked against.
-	local e2x = math.exp(2 * x)
-	return (e2x - 1) / (e2x + 1)
+	-- math.tanh was removed in some Lua builds, so define it directly rather
+	-- than depending on which stdlib we're linked against.
+	--
+	-- The naive (e^2x - 1)/(e^2x + 1) overflows to inf/inf = NaN once x is
+	-- large (around x > 355 for doubles), instead of saturating to 1. A
+	-- single NaN activation propagates through the whole forward pass and
+	-- silently destroys every decision downstream. Branching on the sign
+	-- keeps the exponent negative, so it underflows harmlessly to 0 and the
+	-- result saturates correctly at the limits.
+	if x >= 0 then
+		local z = math.exp(-2 * x)
+		return (1 - z) / (1 + z)
+	end
+	local z = math.exp(2 * x)
+	return (z - 1) / (z + 1)
 end
 
 function Utils.dot(a, b)
@@ -354,6 +365,203 @@ function NeuralNet:forward(input)
 end
 
 Cell4.NeuralNet = NeuralNet
+
+-- =========================================================================
+-- PolicyFormat: the interchange between the external trainer and this
+-- runtime. A plain line-based text format, parsed by hand.
+--
+-- Deliberately NOT a Lua chunk loaded with load()/loadstring: that would
+-- execute whatever arrives, and Roblox disables loadstring by default
+-- anyway. Deliberately not JSON either, so this file needs no JSON library
+-- and no host-specific API. The parser only ever reads numbers and names.
+--
+-- The format carries the training contract alongside the weights, which is
+-- the whole point: a model trained against a stale feature or action set
+-- must be rejected at load time, not silently produce confident garbage.
+--
+--   cell4-policy 1
+--   features threat health
+--   actions flee heal patrol
+--   activation relu linear
+--   layer 2 4          # inputs outputs
+--   w 0.1 -0.2         # one line per output neuron, `inputs` numbers each
+--   w ...              # (4 w-lines for this layer)
+--   b 0.0 0.0 0.0 0.0  # `outputs` numbers
+--   layer 4 3
+--   ...
+--
+-- Blank lines and `#` comments are ignored.
+-- =========================================================================
+local PolicyFormat = {}
+
+PolicyFormat.VERSION = 1
+
+local function formatNumber(x)
+	-- %.17g round-trips an IEEE double exactly.
+	return string.format("%.17g", x)
+end
+
+local function joinNumbers(values)
+	local parts = {}
+	for i = 1, #values do
+		parts[i] = formatNumber(values[i])
+	end
+	return table.concat(parts, " ")
+end
+
+-- bundle: { features = {names}, actions = {names}, activation, outputActivation,
+--           layers = { {weights = {{...}}, biases = {...}}, ... } }
+function PolicyFormat.encode(bundle)
+	assert(bundle.features, "bundle needs features")
+	assert(bundle.actions, "bundle needs actions")
+	assert(bundle.layers and #bundle.layers > 0, "bundle needs layers")
+
+	local lines = {
+		"cell4-policy " .. PolicyFormat.VERSION,
+		"features " .. table.concat(bundle.features, " "),
+		"actions " .. table.concat(bundle.actions, " "),
+		"activation " .. (bundle.activation or "relu") .. " " .. (bundle.outputActivation or "linear"),
+	}
+
+	for _, layer in ipairs(bundle.layers) do
+		local outSize = #layer.weights
+		local inSize = #layer.weights[1]
+		table.insert(lines, string.format("layer %d %d", inSize, outSize))
+		for o = 1, outSize do
+			table.insert(lines, "w " .. joinNumbers(layer.weights[o]))
+		end
+		table.insert(lines, "b " .. joinNumbers(layer.biases))
+	end
+
+	return table.concat(lines, "\n") .. "\n"
+end
+
+-- table.unpack is 5.2+; Lua 5.1 spells it `unpack`. Copy explicitly so the
+-- parser stays portable across both.
+local function sliceTokens(tokens, from)
+	local out = {}
+	for i = from, #tokens do
+		out[#out + 1] = tokens[i]
+	end
+	return out
+end
+
+local function parseNumbers(tokens, from, count, context)
+	local values = {}
+	for i = 1, count do
+		local token = tokens[from + i - 1]
+		local n = tonumber(token)
+		if n == nil or n ~= n then
+			error(("%s: expected %d numbers, got %s at position %d"):format(
+				context, count, tostring(token), i), 0)
+		end
+		values[i] = n
+	end
+	if tokens[from + count] ~= nil then
+		error(("%s: expected %d numbers, found extra values"):format(context, count), 0)
+	end
+	return values
+end
+
+-- Returns the bundle, or (nil, errorMessage). Never raises on malformed
+-- input: a bad model file is an expected condition, not a crash.
+function PolicyFormat.decode(text)
+	if type(text) ~= "string" then
+		return nil, "expected a string"
+	end
+
+	local ok, result = pcall(function()
+		local bundle = { layers = {} }
+		local currentLayer, expectedIn, expectedOut = nil, nil, nil
+		local lineNumber = 0
+
+		local function finishLayer()
+			if not currentLayer then return end
+			if #currentLayer.weights ~= expectedOut then
+				error(("layer declared %d outputs but has %d w-lines"):format(
+					expectedOut, #currentLayer.weights), 0)
+			end
+			if not currentLayer.biases then
+				error("layer is missing its b line", 0)
+			end
+			table.insert(bundle.layers, currentLayer)
+			currentLayer = nil
+		end
+
+		for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+			lineNumber = lineNumber + 1
+			line = line:gsub("#.*$", ""):match("^%s*(.-)%s*$")
+			if line ~= "" then
+				local tokens = {}
+				for token in line:gmatch("%S+") do
+					table.insert(tokens, token)
+				end
+				local keyword = tokens[1]
+				local where = "line " .. lineNumber
+
+				if keyword == "cell4-policy" then
+					local version = tonumber(tokens[2])
+					if version ~= PolicyFormat.VERSION then
+						error(("unsupported format version %s (this runtime reads %d)"):format(
+							tostring(tokens[2]), PolicyFormat.VERSION), 0)
+					end
+					bundle.version = version
+				elseif keyword == "features" then
+					bundle.features = sliceTokens(tokens, 2)
+				elseif keyword == "actions" then
+					bundle.actions = sliceTokens(tokens, 2)
+				elseif keyword == "activation" then
+					bundle.activation = tokens[2]
+					bundle.outputActivation = tokens[3]
+				elseif keyword == "layer" then
+					finishLayer()
+					expectedIn, expectedOut = tonumber(tokens[2]), tonumber(tokens[3])
+					if not expectedIn or not expectedOut or expectedIn < 1 or expectedOut < 1 then
+						error(where .. ": layer needs positive input and output sizes", 0)
+					end
+					currentLayer = { weights = {}, biases = nil }
+				elseif keyword == "w" then
+					if not currentLayer then error(where .. ": w line outside any layer", 0) end
+					if currentLayer.biases then error(where .. ": w line after this layer's b line", 0) end
+					table.insert(currentLayer.weights, parseNumbers(tokens, 2, expectedIn, where))
+				elseif keyword == "b" then
+					if not currentLayer then error(where .. ": b line outside any layer", 0) end
+					if currentLayer.biases then error(where .. ": duplicate b line", 0) end
+					currentLayer.biases = parseNumbers(tokens, 2, expectedOut, where)
+				else
+					error(where .. ": unknown keyword '" .. tostring(keyword) .. "'", 0)
+				end
+			end
+		end
+		finishLayer()
+
+		if not bundle.version then error("missing 'cell4-policy <version>' header", 0) end
+		if not bundle.features then error("missing 'features' line", 0) end
+		if not bundle.actions then error("missing 'actions' line", 0) end
+		if #bundle.layers == 0 then error("no layers in file", 0) end
+
+		-- Layer shapes must chain: each layer's inputs are the previous
+		-- layer's outputs.
+		bundle.layerSizes = { #bundle.layers[1].weights[1] }
+		for i, layer in ipairs(bundle.layers) do
+			local inSize = #layer.weights[1]
+			if inSize ~= bundle.layerSizes[i] then
+				error(("layer %d takes %d inputs but the previous layer emits %d"):format(
+					i, inSize, bundle.layerSizes[i]), 0)
+			end
+			table.insert(bundle.layerSizes, #layer.weights)
+		end
+
+		return bundle
+	end)
+
+	if not ok then
+		return nil, tostring(result)
+	end
+	return result
+end
+
+Cell4.PolicyFormat = PolicyFormat
 
 -- =========================================================================
 -- Perception: turns raw, unbounded world signals into a normalized feature
@@ -1079,6 +1287,120 @@ function Pipeline:trainingContract()
 		actions = actions,
 		actionIndex = actionIndex,
 		policy = self.reasoning.policyNet and self.reasoning.policyNet:describe() or nil,
+	}
+end
+
+-- Loads a trained policy, but only if it was trained against this runtime.
+--
+-- Accepts either a PolicyFormat string or an already-decoded bundle.
+-- Returns true on success, or (false, reason) - a mismatched model is an
+-- expected condition to report, not a crash.
+--
+-- Validation is the point of this function. A model whose feature order or
+-- action set has drifted from the runtime will still happily produce
+-- numbers; those numbers just mean something else now. Silently loading it
+-- yields an agent that is confidently wrong, which is far worse than one
+-- that refuses to load. The rules:
+--   * features must match the perception spec exactly, in order (they are
+--     the input vector - position IS meaning)
+--   * actions must match the runtime's action set exactly, in order (they
+--     are the output indices). This requires the policy to have an output
+--     for every action the agent can take.
+--   * layer shape must chain from #features to #actions
+function Pipeline:loadPolicy(source)
+	local bundle = source
+	if type(source) == "string" then
+		local decoded, decodeError = PolicyFormat.decode(source)
+		if not decoded then
+			return false, "could not parse policy: " .. tostring(decodeError)
+		end
+		bundle = decoded
+	end
+	if type(bundle) ~= "table" or not bundle.layers then
+		return false, "expected a policy string or decoded bundle"
+	end
+
+	local function describeList(list)
+		return "[" .. table.concat(list, ", ") .. "]"
+	end
+	local function sameList(a, b)
+		if #a ~= #b then return false end
+		for i = 1, #a do
+			if a[i] ~= b[i] then return false end
+		end
+		return true
+	end
+
+	local liveFeatures = {}
+	for i, field in ipairs(self.spec) do
+		liveFeatures[i] = field.key
+	end
+	if not bundle.features or not sameList(bundle.features, liveFeatures) then
+		return false, ("feature mismatch: policy was trained on %s but this runtime perceives %s")
+			:format(describeList(bundle.features or {}), describeList(liveFeatures))
+	end
+
+	-- The live action set must be computed as if this policy were already
+	-- attached, since a policy may legitimately introduce actions that no
+	-- rule votes for.
+	local previousActions = self.reasoning.policyActions
+	self.reasoning.policyActions = bundle.actions
+	local liveActions = self.reasoning:actionNames()
+	self.reasoning.policyActions = previousActions
+
+	if not bundle.actions or not sameList(bundle.actions, liveActions) then
+		return false, ("action mismatch: policy outputs %s but this runtime's actions are %s")
+			:format(describeList(bundle.actions or {}), describeList(liveActions))
+	end
+
+	local layerSizes = bundle.layerSizes
+	if not layerSizes then
+		layerSizes = { #bundle.layers[1].weights[1] }
+		for _, layer in ipairs(bundle.layers) do
+			table.insert(layerSizes, #layer.weights)
+		end
+	end
+	if layerSizes[1] ~= #liveFeatures then
+		return false, ("policy takes %d inputs but there are %d features")
+			:format(layerSizes[1], #liveFeatures)
+	end
+	if layerSizes[#layerSizes] ~= #liveActions then
+		return false, ("policy emits %d outputs but there are %d actions")
+			:format(layerSizes[#layerSizes], #liveActions)
+	end
+
+	local net = NeuralNet.new(layerSizes, bundle.activation, bundle.outputActivation)
+	local loaded, loadError = pcall(function()
+		net:loadWeights({ layers = bundle.layers })
+	end)
+	if not loaded then
+		return false, "weights rejected: " .. tostring(loadError)
+	end
+
+	self.reasoning:attachPolicy(net, bundle.actions, self.reasoning.policyWeight)
+	return true
+end
+
+-- Everything the external trainer needs to export a policy this runtime
+-- will accept: the contract, plus the exact layer shape to produce. The
+-- hidden layer sizes are the trainer's choice; the first and last are not.
+function Pipeline:policyTemplate(hiddenSizes)
+	local contract = self:trainingContract()
+	local layerSizes = { #contract.features }
+	for _, size in ipairs(hiddenSizes or {}) do
+		table.insert(layerSizes, size)
+	end
+	table.insert(layerSizes, #contract.actions)
+
+	local features = {}
+	for i, field in ipairs(contract.features) do
+		features[i] = field.name
+	end
+
+	return {
+		features = features,
+		actions = contract.actions,
+		layerSizes = layerSizes,
 	}
 end
 
