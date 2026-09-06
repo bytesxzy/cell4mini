@@ -53,12 +53,12 @@ Measured on this checkout:
 
 | | |
 | --- | --- |
-| corpus | 920 training / 201 dev examples, from 316 fit-split tasks |
-| vocabulary | 278 tokens |
-| parameters | ~939 feature rows, ~100k non-zero weights (2.1 MB of JSON) |
-| dev perplexity | **12.6** |
-| unigram baseline, same dev, same vocabulary | 51.5 |
-| uniform baseline | 278.0 |
+| corpus | 921 training / 201 dev examples, from 316 fit-split tasks |
+| vocabulary | 282 tokens |
+| parameters | 960 feature rows, ~118k non-zero weights (2.5 MB of JSON) |
+| dev perplexity | **12.9** |
+| unigram baseline, same dev, same vocabulary | 52.0 |
+| uniform baseline | 282.0 |
 | training time | ~7 s for a full pass on 4 vCPU |
 
 ## Where it is strapped in
@@ -122,7 +122,11 @@ way in both halves:
   discordant tasks says it beat the incumbent (`bench/evolve.py`, untouched);
 * a candidate **language model** is adopted only if its perplexity fell on a
   held-out dev slice it was never trained on (`gabriel/train.py`), and within
-  training, only the best-generalising epoch's weights are kept.
+  training, only the best-generalising epoch's weights are kept.  The two
+  models are compared over a common support, but each keeps its own idea of
+  which tokens it knows -- scoring an incumbent's unseen token as a bare zero
+  would rank it above every token that incumbent had learned to distrust, and
+  every candidate would look like an improvement.
 
 Two further rules keep the corpus clean:
 

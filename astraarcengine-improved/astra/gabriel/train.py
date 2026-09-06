@@ -38,18 +38,20 @@ LINEAGE = os.path.join(POLICY_DIR, "gabriel_lineage.jsonl")
 REPORT = os.path.join(ROOT, "evidence", "gabriel_lm.json")
 
 
-def with_vocab(model, vocab, unigram):
-    """A copy of ``model`` evaluated over someone else's vocabulary.
+def on_support(model, vocab):
+    """A copy of ``model`` normalised over ``vocab``, still knowing only its own.
 
-    Perplexities are only comparable over a common support.  The incumbent is
-    re-normalised onto the candidate's vocabulary before the two are compared,
-    which is the conservative direction: new tokens dilute the incumbent's mass
-    exactly as much as they dilute the candidate's.
+    Perplexities are only comparable over a common support, so the incumbent is
+    re-normalised onto the candidate's vocabulary before the two are compared.
+    What must *not* change is which tokens the incumbent knows: a token it was
+    never trained on has no weights, and scoring that as a bare zero would rank
+    it above every token the incumbent learned to distrust.  Its perplexity
+    would blow up, and any candidate at all would look like an improvement.
+    Keeping ``unigram`` means those tokens are scored as ``<unk>`` -- which is
+    exactly what they are to this model -- and the comparison stays honest.
     """
     out = GabrielLM(model.to_dict())
     out.vocab = list(vocab)
-    out.unigram = dict(unigram)
-    out._rebuild_sampler()
     return out
 
 
@@ -96,7 +98,7 @@ def main(argv=None):
     cand_ppl = cand.perplexity(dev) if dev else float("inf")
     base_ppl = None
     if incumbent is not None and incumbent.is_trained() and dev:
-        base_ppl = with_vocab(incumbent, cand.vocab, cand.unigram).perplexity(dev)
+        base_ppl = on_support(incumbent, cand.vocab).perplexity(dev)
 
     if base_ppl is None:
         adopt, why = True, "no incumbent"

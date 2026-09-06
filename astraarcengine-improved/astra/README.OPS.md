@@ -84,6 +84,21 @@ candidate policy failed the sign test and the incumbent was kept.  A language
 model round prints `adopted` with the dev perplexity that decided it.  Rounds
 that change nothing are the loop working, not the loop broken.
 
+## Shared hosting instead of a VPS
+
+`scripts/cron_shared.sh` is the same tick sized for a cPanel account: one
+worker, a `mkdir` lock instead of `flock`, a 5 MB log cap, an interpreter
+lookup (the system `python3` on a cPanel box is often too old -- 3.8 is the
+floor), and **no evolve round**, because a 20-60 minute job across four cores
+is not something to run on a machine you share.  What it does run is the half
+that accumulates across ticks anyway: harvest a few tasks, refit the language
+model, adopt it only if perplexity fell.  About 30-90 seconds per tick.
+
+    */15 * * * * /home/YOURUSER/astraarcengine-improved/astra/scripts/cron_shared.sh >/dev/null 2>&1
+
+Evolve rounds belong on hardware you own.  `policy/` and `evidence/` are plain
+JSON, so moving results between the two is a file copy.
+
 ## Stopping
 
 ```bash

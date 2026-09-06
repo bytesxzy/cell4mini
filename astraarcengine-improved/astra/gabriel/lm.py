@@ -129,6 +129,10 @@ class GabrielLM:
         it as a bare zero instead would let any operator the model has never
         seen outrank every operator it has learned to distrust.
         """
+        # `unigram` is what this model knows; `vocab` is the support it is
+        # being normalised over.  They are the same after training and differ
+        # only when one model is evaluated on another's vocabulary -- which is
+        # precisely when the distinction matters.
         known = self.unigram
         keys = {c: (c if c in known else T.UNK) for c in cands}
         n_oov = sum(1 for c in cands if c not in known)
