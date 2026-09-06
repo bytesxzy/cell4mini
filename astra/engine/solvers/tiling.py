@@ -84,6 +84,41 @@ def _fill_periodic(g, ignore):
                        for c in range(w)) for r in range(h))
 
 
+def _fill_diag(g, ignore, sign):
+    """Fill unknown cells where colour is a function of (r +/- c) mod k.
+
+    Diagonally striped patterns have no row or column period, so the periodic
+    filler above cannot see them at all; this recovers the smallest modulus
+    consistent with every observed cell, and refuses to guess unless every
+    residue class has actually been observed.
+    """
+    h, w = G.dims(g)
+    for k in range(2, 13):
+        table = {}
+        ok = True
+        for r in range(h):
+            row = g[r]
+            for c in range(w):
+                v = row[c]
+                if v == ignore:
+                    continue
+                key = (r + sign * c) % k
+                prev = table.get(key)
+                if prev is None:
+                    table[key] = v
+                elif prev != v:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if not ok or len(table) < k:
+            continue
+        return tuple(tuple(g[r][c] if g[r][c] != ignore
+                           else table[(r + sign * c) % k]
+                           for c in range(w)) for r in range(h))
+    return None
+
+
 def _extend(g, oh, ow):
     h, w = G.dims(g)
     if oh > 60 or ow > 60 or oh < 1 or ow < 1:
@@ -103,6 +138,10 @@ def generate(ctx):
     for c in sorted(ctx.in_palette):
         res.append(_h("motif_ig#%d" % c, lambda g, c=c: _motif(g, c), 4.5))
         res.append(_h("fillper#%d" % c, lambda g, c=c: _fill_periodic(g, c), 4.0))
+        for sign in (1, -1):
+            res.append(_h("filldiag%+d#%d" % (sign, c),
+                          (lambda c, s: lambda g: _fill_diag(g, c, s))(c, sign),
+                          4.2))
     cs = ctx.const_out_shape
     if cs:
         res.append(_h("extend%dx%d" % cs,

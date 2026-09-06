@@ -22,7 +22,7 @@ from ..task import Hyp
 
 SOLVER = "objects"
 
-_SEGS = ("c4", "c8", "m4", "m8", "color")
+_SEGS = ("c4", "c8", "m4", "m8", "color", "g2", "g2m")
 
 _FEATURE_KEYS = ("color", "size", "h", "w", "bbox", "square", "rect", "holes",
                  "ncolors", "border", "size_rank", "is_largest", "is_smallest",
@@ -162,9 +162,12 @@ def _learn(ctx, seg, bg, keys):
 
 def generate(ctx):
     res = []
+    bg = ctx.bg
+    # counting answers change the grid shape by construction, so they must be
+    # offered before the same-shape gate below
+    res.extend(_count_outputs(ctx, bg))
     if not ctx.same_shape:
         return res
-    bg = ctx.bg
     singles = [(k,) for k in _FEATURE_KEYS] + [(_SHAPE_KEY,)]
     pairs = [("size", "color"), ("color", "holes"), ("size", "holes"),
              ("h", "w"), ("color", "shape_freq"), ("size", "border"),
@@ -184,7 +187,6 @@ def generate(ctx):
                 if r is not None:
                     res.append(_h("%s@%d.by_%s" % (seg, sbg, "+".join(keys)), r,
                                   5.0 + extra + 0.05 * len(r.table)))
-    res.extend(_count_outputs(ctx, bg))
     res.extend(_bbox_rules(ctx, bg))
     return res
 
@@ -238,8 +240,8 @@ def _count_grid(g, f, shape, cmode, bg):
 
 def _bbox_rules(ctx, bg):
     res = []
-    for seg in ("c4", "c8", "m8"):
-        for mode in ("fill_own", "outline_own", "fill_hole"):
+    for seg in ("c4", "c8", "m8", "g2", "g2m"):
+        for mode in ("fill_own", "outline_own", "fill_hole", "halo_own"):
             res.append(_h("%s.%s" % (seg, mode),
                           (lambda seg, mode, bg:
                            lambda g: _bbox_render(g, seg, mode, bg))(seg, mode, bg),
@@ -248,6 +250,10 @@ def _bbox_rules(ctx, bg):
             res.append(_h("%s.fill_bbox#%d" % (seg, c),
                           (lambda seg, c, bg:
                            lambda g: _bbox_render(g, seg, ("fill", c), bg))(seg, c, bg),
+                          5.5))
+            res.append(_h("%s.halo_bbox#%d" % (seg, c),
+                          (lambda seg, c, bg:
+                           lambda g: _bbox_render(g, seg, ("halo", c), bg))(seg, c, bg),
                           5.5))
     return res
 
@@ -295,6 +301,17 @@ def _bbox_render(g, seg, mode, bg):
                 for c in range(ww):
                     if not m[r][c] and not seen[r][c]:
                         out[o.r0 + r][o.c0 + c] = o.color
+        elif mode == "halo_own":
+            for r in range(o.r0, o.r1 + 1):
+                for c in range(o.c0, o.c1 + 1):
+                    if (r, c) not in o.cells:
+                        out[r][c] = o.color
+        elif isinstance(mode, tuple) and mode[0] == "halo":
+            # fill the bounding box *around* the object, leaving it intact
+            for r in range(o.r0, o.r1 + 1):
+                for c in range(o.c0, o.c1 + 1):
+                    if (r, c) not in o.cells:
+                        out[r][c] = mode[1]
         elif isinstance(mode, tuple):
             for r in range(o.r0, o.r1 + 1):
                 for c in range(o.c0, o.c1 + 1):

@@ -178,7 +178,49 @@ def seg_cells(grid, bg):
             for r in range(h) for c in range(w) if grid[r][c] != bg]
 
 
+def seg_connected_gap(grid, bg, gap, same_color=True):
+    """Components where cells within Chebyshev distance ``gap`` are linked.
+
+    Real ARC objects are often *scattered* -- a dashed line, a row of marks
+    with one cell between them.  Strict adjacency splits those into singletons
+    and every object-level rule then misses.
+    """
+    h, w = dims(grid)
+    pts = [(r, c) for r in range(h) for c in range(w) if grid[r][c] != bg]
+    if len(pts) > 400:
+        return []
+    idx = {p: i for i, p in enumerate(pts)}
+    parent = list(range(len(pts)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, (r, c) in enumerate(pts):
+        for dr in range(-gap, gap + 1):
+            for dc in range(-gap, gap + 1):
+                if dr == 0 and dc == 0:
+                    continue
+                j = idx.get((r + dr, c + dc))
+                if j is None or j < i:
+                    continue
+                if same_color and grid[r + dr][c + dc] != grid[r][c]:
+                    continue
+                a, b = find(i), find(j)
+                if a != b:
+                    parent[b] = a
+    groups = {}
+    for i, p in enumerate(pts):
+        groups.setdefault(find(i), []).append(p)
+    return [Obj(frozenset(cs), grid) for cs in groups.values()]
+
+
 SEGMENTATIONS = (
+    ("g2", lambda g, bg: seg_connected_gap(g, bg, 2, True)),
+    ("g2m", lambda g, bg: seg_connected_gap(g, bg, 2, False)),
+    ("g3", lambda g, bg: seg_connected_gap(g, bg, 3, True)),
     ("c4", lambda g, bg: seg_connected(g, bg, False, True)),
     ("c8", lambda g, bg: seg_connected(g, bg, True, True)),
     ("m4", lambda g, bg: seg_connected(g, bg, False, False)),

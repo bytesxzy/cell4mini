@@ -272,6 +272,33 @@ def block_reduce_mode(g, ky, kx):
     return tuple(out)
 
 
+def block_reduce_nonbg(g, ky, kx, bg):
+    """Downscale by taking each block's single non-background colour.
+
+    ``downscale`` needs uniform blocks and ``block_reduce_mode`` is swamped by
+    background; neither can shrink a sparse grid whose blocks each hold one
+    coloured cell.
+    """
+    h, w = dims(g)
+    if ky < 1 or kx < 1 or h % ky or w % kx:
+        return None
+    out = []
+    for r in range(0, h, ky):
+        row = []
+        for c in range(0, w, kx):
+            vals = set()
+            for rr in range(r, r + ky):
+                for cc in range(c, c + kx):
+                    v = g[rr][cc]
+                    if v != bg:
+                        vals.add(v)
+            if len(vals) > 1:
+                return None
+            row.append(vals.pop() if vals else bg)
+        out.append(tuple(row))
+    return tuple(out)
+
+
 def tile(g, ky, kx):
     h, w = dims(g)
     if ky < 1 or kx < 1 or h * ky > 60 or w * kx > 60:

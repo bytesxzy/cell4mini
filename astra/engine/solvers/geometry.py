@@ -87,6 +87,12 @@ def generate(ctx):
                       lambda g, f=f: G.vconcat(f(g), g), 4.5))
     out.append(_h("hcat_self", lambda g: G.hconcat(g, g), 4.0))
     out.append(_h("vcat_self", lambda g: G.vconcat(g, g), 4.0))
+    # union of the grid with a dihedral image of itself (mirror completion)
+    for name, f in G.DIHEDRAL[1:]:
+        out.append(_h("union_" + name,
+                      (lambda f, b=bg: lambda g: _union(g, f(g), b))(f), 3.2))
+        out.append(_h("union_" + name + "_rev",
+                      (lambda f, b=bg: lambda g: _union(f(g), g, b))(f), 3.4))
     out.append(_h("quad_mirror", _quad_mirror, 4.5))
     out.append(_h("quad_mirror_r", _quad_mirror_r, 5.0))
 
@@ -109,6 +115,14 @@ def generate(ctx):
         out.append(_h("fill_holes8#%d" % c,
                       lambda g, c=c, b=bg: G.fill_holes(g, c, b, True), 4.0))
     return out
+
+
+def _union(a, b, bg):
+    """Overlay ``b`` onto ``a`` wherever ``a`` is background."""
+    if a is None or b is None or G.dims(a) != G.dims(b):
+        return None
+    return tuple(tuple(x if x != bg else y for x, y in zip(ra, rb))
+                 for ra, rb in zip(a, b))
 
 
 def _quad_mirror(g):

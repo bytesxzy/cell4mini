@@ -51,13 +51,13 @@ def register(module):
 def _load_default():
     if _REGISTRY:
         return
-    from .solvers import (analogy, blocks, cellwise, colormap, compose,
+    from .solvers import (analogy, blocks, cascade, cellwise, colormap, compose,
                           enumerate_dsl, geometry, objects_map, partition,
-                          regions, rewrite, select, sequence, substitute,
-                          symmetry, tiling)
+                          regions, rewrite, paint, select, sequence,
+                          substitute, symmetry, tiling)
     for m in (geometry, colormap, partition, symmetry, tiling, blocks, select,
-              regions, cellwise, objects_map, substitute, sequence, analogy,
-              compose, rewrite, enumerate_dsl):
+              regions, cellwise, objects_map, substitute, sequence, paint, analogy,
+              compose, rewrite, cascade, enumerate_dsl):
         register(m)
 
 
@@ -79,11 +79,12 @@ def _loo_bonus(mod, ctx, hyp):
     """Refit the generating solver with one train pair withheld.
 
     A hypothesis family that still reproduces the withheld pair is evidence of
-    a real rule rather than a coincidence.  Returns a bonus in [0, 3].
+    a real rule rather than a coincidence.  Returns the fraction in [0, 1];
+    ``0.0`` also stands for "not enough pairs to judge".
     """
     train = ctx.train
     if len(train) < 3:
-        return 0.0
+        return None                 # too few pairs to judge; stay neutral
     wins = 0
     trials = 0
     for i in range(len(train)):
@@ -95,15 +96,15 @@ def _loo_bonus(mod, ctx, hyp):
             sub_ctx.deadline = min(ctx.deadline or 1e18, time.time() + 0.7)
             cands = [h for h in mod.generate(sub_ctx) if h.fits(sub)]
         except Exception:
-            return 0.0
+            return None
         trials += 1
         if any(h.apply(held_in) == held_out for h in cands):
             wins += 1
         if ctx.timed_out():
             break
     if not trials:
-        return 0.0
-    return 3.0 * (wins / float(trials))
+        return None
+    return wins / float(trials)
 
 
 def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
@@ -181,7 +182,13 @@ def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
             if key in seen_mods:
                 continue
             seen_mods.add(key)
-            rec[0] -= _loo_bonus(mod, ctx, rec[2])
+            frac = _loo_bonus(mod, ctx, rec[2])
+            if frac is None:
+                continue
+            # Reward families that still explain a withheld pair and *penalise*
+            # those that cannot: a rule refitted without one example and then
+            # failing on it has no claim on the test input either.
+            rec[0] += 1.5 - 4.5 * frac
 
     fitted.sort(key=lambda x: (x[0], x[1]))
 

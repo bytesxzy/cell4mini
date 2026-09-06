@@ -141,15 +141,39 @@ def _frame_content(g, bg, which):
     return G.subgrid(g, f[0], f[1], f[2], f[3])
 
 
-def _marked_rect(g, bg, marker, inclusive):
+def _marked_rect(g, bg, marker, inclusive, pr=0, pc=0):
+    """Bounding box of a marker colour, optionally grown or shrunk.
+
+    Growing matters because markers usually delimit a structure rather than
+    being it -- a pair of ruled lines with capped ends, for instance.
+    """
     cells = [(r, c) for r, row in enumerate(g) for c, v in enumerate(row)
              if v == marker]
     if len(cells) < 2:
         return None
+    h, w = G.dims(g)
     r0, c0, r1, c1 = G.bbox_of(cells)
     if not inclusive:
         r0, c0, r1, c1 = r0 + 1, c0 + 1, r1 - 1, c1 - 1
+    r0, c0 = max(0, r0 - pr), max(0, c0 - pc)
+    r1, c1 = min(h - 1, r1 + pr), min(w - 1, c1 + pc)
     return G.subgrid(g, r0, c0, r1, c1)
+
+
+def _color_component_box(g, bg, color, seg):
+    """Crop to the components that *contain* a given colour.
+
+    Distinct from cropping to the colour itself: the interesting object is
+    usually the whole connected structure the marker is part of.
+    """
+    objs = O.segment(g, seg, bg)
+    cells = set()
+    for o in objs:
+        if color in o.colors():
+            cells |= o.cells
+    if not cells:
+        return None
+    return G.subgrid(g, *G.bbox_of(cells))
 
 
 def _cut_color_region(g, bg, color):
@@ -253,6 +277,15 @@ def generate(ctx):
                       (lambda c, bg: lambda g: _marked_rect(g, bg, c, True))(c, bg), 4.5))
         res.append(_h("notbox#%d" % c,
                       (lambda c, bg: lambda g: _cut_color_region(g, bg, c))(c, bg), 4.5))
+        for pr, pc in ((1, 0), (0, 1), (1, 1)):
+            res.append(_h("mark#%d_pad%d%d" % (c, pr, pc),
+                          (lambda c, bg, pr, pc:
+                           lambda g: _marked_rect(g, bg, c, True, pr, pc))(c, bg, pr, pc),
+                          4.8))
+        for seg in ("m8", "m4"):
+            res.append(_h("compbox#%d.%s" % (c, seg),
+                          (lambda c, bg, seg: lambda g: _color_component_box(g, bg, c, seg))(c, bg, seg),
+                          4.2))
 
     # -- colour answers ---------------------------------------------------
     shapes = [None]

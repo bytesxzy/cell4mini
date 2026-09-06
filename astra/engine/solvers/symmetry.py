@@ -56,6 +56,12 @@ def _candidate_maps(h, w):
         maps.append(("tr%d" % p, (lambda p: lambda r, c: (r + p, c))(p)))
     for q in range(1, w):
         maps.append(("tc%d" % q, (lambda q: lambda r, c: (r, c + q))(q)))
+    # Diagonal translations.  A grid whose colour depends on (r+c) mod k or
+    # (r-c) mod k is invariant under these and under nothing else in the list,
+    # so without them every diagonally striped pattern is unrepairable.
+    for p in range(1, min(h, w)):
+        maps.append(("td%d" % p, (lambda p: lambda r, c: (r + p, c + p))(p)))
+        maps.append(("ta%d" % p, (lambda p: lambda r, c: (r + p, c - p))(p)))
     if h == w:
         maps.append(("diag", lambda r, c: (c, r)))
         maps.append(("adiag", (lambda n: lambda r, c: (n - c, n - r))(h - 1)))

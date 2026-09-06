@@ -87,6 +87,10 @@ def base_unary_ops(ctx, level="full"):
         a(("upx2", 1.6, lambda g: G.upscale(g, 2, 2)))
         a(("upx3", 1.8, lambda g: G.upscale(g, 3, 3)))
         a(("dnx2", 1.6, lambda g: G.downscale(g, 2, 2)))
+        for k in (2, 3):
+            a(("nzx%d" % k, 1.9,
+               (lambda k, b=bg: lambda g: G.block_reduce_nonbg(g, k, k, b))(k)))
+            a(("upx%d_" % k, 1.9, (lambda k: lambda g: G.upscale(g, k, k))(k)))
         a(("dnx3", 1.8, lambda g: G.downscale(g, 3, 3)))
         a(("tile2", 1.8, lambda g: G.tile(g, 2, 2)))
         a(("pad0", 1.8, lambda g: G.pad(g, 1, bg)))
@@ -141,34 +145,40 @@ def _uniq(g, seg, bg):
     return None if o is None else o.filled(bg)
 
 
-BINARY_OPS = (
-    ("hcat", 2.0, G.hconcat),
-    ("vcat", 2.0, G.vconcat),
-    ("and", 2.2, lambda a, b: _log(a, b, "and")),
-    ("or", 2.2, lambda a, b: _log(a, b, "or")),
-    ("xor", 2.2, lambda a, b: _log(a, b, "xor")),
-    ("diff", 2.4, lambda a, b: _log(a, b, "diff")),
-    ("over", 2.2, lambda a, b: _log(a, b, "over")),
-)
+def binary_ops(bg=0):
+    """Pairwise combinators.  Parameterised by background: "empty" is not
+    always colour 0, and hard-coding it silently breaks every task drawn on a
+    coloured field."""
+    return (
+        ("hcat", 2.0, G.hconcat),
+        ("vcat", 2.0, G.vconcat),
+        ("and", 2.2, (lambda b: lambda x, y: _log(x, y, "and", b))(bg)),
+        ("or", 2.2, (lambda b: lambda x, y: _log(x, y, "or", b))(bg)),
+        ("xor", 2.2, (lambda b: lambda x, y: _log(x, y, "xor", b))(bg)),
+        ("diff", 2.4, (lambda b: lambda x, y: _log(x, y, "diff", b))(bg)),
+        ("over", 2.2, (lambda b: lambda x, y: _log(x, y, "over", b))(bg)),
+        ("under", 2.4, (lambda b: lambda x, y: _log(y, x, "over", b))(bg)),
+    )
 
 
-def _log(a, b, op):
+def _log(a, b, op, bg=0):
     if a is None or b is None or G.dims(a) != G.dims(b):
         return None
     out = []
     for ra, rb in zip(a, b):
         row = []
         for x, y in zip(ra, rb):
+            fx, fy = x != bg, y != bg
             if op == "and":
-                row.append(x if (x and y) else 0)
+                row.append(x if (fx and fy) else bg)
             elif op == "or":
-                row.append(x or y)
+                row.append(x if fx else (y if fy else bg))
             elif op == "xor":
-                row.append(0 if (bool(x) == bool(y)) else (x or y))
+                row.append(bg if (fx == fy) else (x if fx else y))
             elif op == "diff":
-                row.append(x if (x and not y) else 0)
+                row.append(x if (fx and not fy) else bg)
             else:
-                row.append(y if y else x)
+                row.append(y if fy else x)
         out.append(tuple(row))
     return tuple(out)
 
@@ -210,7 +220,9 @@ def search(ctx, depth=3, max_states=1400, deadline=None, level="full",
         ops.sort(key=lambda t: t[1] - bias.get(t[0], 0.0))
     found = []
     seen = {grids: True}
-    frontier = [_Node(grids, (), 0.0)]
+    root = _Node(grids, (), 0.0)
+    frontier = [root]
+    every = [root]          # every node ever expanded, for the binary layer
     names = {grids: "$"}
 
     def check(node):
@@ -250,6 +262,7 @@ def search(ctx, depth=3, max_states=1400, deadline=None, level="full",
                         return found
                     continue
                 nxt.append(nn)
+                every.append(nn)
                 if len(nxt) >= max_states:
                     break
             if len(nxt) >= max_states:
@@ -260,14 +273,18 @@ def search(ctx, depth=3, max_states=1400, deadline=None, level="full",
             break
 
     if use_binary and not found:
-        pool = [_Node(grids, (), 0.0)] + frontier[:110]
+        # draw the binary pool from every level, not just the last: the useful
+        # pairings are usually a shallow view of the grid against a deeper one
+        every.sort(key=lambda n: n.cost)
+        pool = every[:120]
+        bops = binary_ops(ctx.bg)
         for i, na in enumerate(pool):
             if deadline and time.time() > deadline:
                 break
-            for nb in pool[:110]:
+            for nb in pool:
                 if na is nb:
                     continue
-                for oname, ocost, bf in BINARY_OPS:
+                for oname, ocost, bf in bops:
                     st = []
                     ok = True
                     for x, y in zip(na.state, nb.state):
