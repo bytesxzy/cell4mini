@@ -1,0 +1,6 @@
+# Build artifact: the distributable archive of astra/, regenerate with
+#   zip -rq astra-arc-engine.zip astra -x "*__pycache__*" "*.pyc"
+astra-arc-engine.zip
+
+__pycache__/
+*.pyc
