@@ -27,7 +27,7 @@ _SEGS = ("c4", "c8", "m4", "m8", "color", "g2", "g2m")
 _FEATURE_KEYS = ("color", "size", "h", "w", "bbox", "square", "rect", "holes",
                  "ncolors", "border", "size_rank", "is_largest", "is_smallest",
                  "shape_freq", "shape_unique", "color_freq", "color_unique",
-                 "r0", "c0", "row_band", "col_band")
+                 "r0", "c0", "row_band", "col_band", "container", "n_contains")
 
 _SHAPE_KEY = "__shape__"
 
@@ -186,7 +186,8 @@ def generate(ctx):
     singles = [(k,) for k in _FEATURE_KEYS] + [(_SHAPE_KEY,)]
     pairs = [("size", "color"), ("color", "holes"), ("size", "holes"),
              ("h", "w"), ("color", "shape_freq"), ("size", "border"),
-             ("color", "border"), ("ncolors", "size")]
+             ("color", "border"), ("ncolors", "size"),
+             ("container", "size"), ("container", "color")]
     for bi, sbg in enumerate(_bg_candidates(ctx)):
         extra = 0.0 if bi == 0 else 1.0
         if sbg is None:

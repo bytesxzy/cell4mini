@@ -368,7 +368,36 @@ def _shared_stats(objs, grid):
         "shape_cnt": Counter(x.norm_key() for x in objs),
         "color_cnt": Counter(x.color for x in objs),
         "dims": dims(grid),
+        "containment": _containment(objs),
     }
+
+
+def _containment(objs):
+    """For each object: what encloses it, and how much it encloses.
+
+    "Colour each shape like the box it sits in" is an object rule whose
+    evidence is entirely relational -- nothing about the shape itself says what
+    colour it should be.
+    """
+    n = len(objs)
+    inner = [(-1, 0)] * n
+    if n > 60:
+        return inner
+    for i, o in enumerate(objs):
+        best = None
+        cnt = 0
+        for j, p in enumerate(objs):
+            if i == j:
+                continue
+            if (p.r0 <= o.r0 and p.c0 <= o.c0 and p.r1 >= o.r1 and p.c1 >= o.c1
+                    and p.bbox_area > o.bbox_area):
+                if best is None or p.bbox_area < objs[best].bbox_area:
+                    best = j
+            if (o.r0 <= p.r0 and o.c0 <= p.c0 and o.r1 >= p.r1 and o.c1 >= p.c1
+                    and o.bbox_area > p.bbox_area):
+                cnt += 1
+        inner[i] = (objs[best].color if best is not None else -1, cnt)
+    return inner
 
 
 def object_features(o, objs, grid, shared=None):
@@ -380,7 +409,13 @@ def object_features(o, objs, grid, shared=None):
     shape_cnt = shared["shape_cnt"]
     color_cnt = shared["color_cnt"]
     gh, gw = shared["dims"]
+    try:
+        cont, ncont = shared["containment"][objs.index(o)]
+    except (ValueError, IndexError, KeyError):
+        cont, ncont = -1, 0
     return {
+        "container": cont,
+        "n_contains": ncont,
         "color": o.color,
         "size": o.size,
         "h": o.height,

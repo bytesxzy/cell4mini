@@ -4,7 +4,35 @@ All numbers on this page were produced by the code in this directory, on the
 550 public ARC task files in `data/arc/`, in this environment. Nothing is
 estimated, extrapolated, or carried over from another machine.
 
-<!--RESULTS-TABLE-->
+## Headline
+
+| engine | tasks solved (1 attempt) | rate | 2 attempts | rate |
+|---|---:|---:|---:|---:|
+| CELL4 Astra V2 (previous, Lua) | 64 / 550 | 11.6% | - | - |
+| **ASTRA** (this engine) | **209 / 550** | **38.0%** | 222 / 550 | 40.4% |
+
+**+145 tasks, +227% relative, +26.4 accuracy points.** Paired per task: **147 wins, 2 losses**, sign test p = 1.57e-41.
+
+## By corpus
+
+| corpus | tasks | previous | ASTRA | ASTRA rate |
+|---|---:|---:|---:|---:|
+| ARC-AGI-1 files | 400 | 52 | 168 | 42.0% |
+| ARC-AGI-2 files | 150 | 12 | 41 | 27.3% |
+
+## Run settings
+
+| | |
+|---|---|
+| per-task budget | 20 s wall clock |
+| attempts scored | top-1 and top-2 |
+| total CPU | 2020 s over 550 tasks (3.7 s/task mean) |
+| wall clock | 508 s at 4-way parallelism |
+| bounded solver errors | 0 (counted as unsolved) |
+| learned policy | none (stock engine) |
+
+Tasks the previous engine solved and this one does not: `arc1_46f33fce`, `arc1_8eb1be9a`.
+
 
 ## How the comparison is made
 
@@ -41,6 +69,26 @@ python3 bench/evolve.py --rounds 3 --budget 14 --jobs 4 --final-holdout
 
 Timings vary with the machine; the solved set does not, except where a task
 sits near its per-task deadline.
+
+## What the measurements say about the remaining gap
+
+Two diagnostics were run rather than assumed, and both point the same way.
+
+**More compute buys nothing.** The identical engine measured at a 45 s per-task
+budget solves exactly the same 209 tasks (and the same 222 at two attempts) as
+at 20 s. The search saturates well inside the budget; the bottleneck is the
+hypothesis space, not the clock.
+
+**Better ranking buys little.** `bench/headroom.py` re-runs every failed task
+collecting *all* distinct predictions any fitting hypothesis produced, and asks
+whether the right answer was in there and merely out-ranked. On a 70-task
+sample of the failures it was present 10 times -- about 14%. The engine is not
+mostly making the wrong choice among answers it found; on the tasks it misses
+it usually never generates the right answer at all.
+
+That is why the last several rounds of work went into new hypothesis families
+rather than into tuning, and it is the honest statement of where the ceiling
+currently sits.
 
 ## Honest scope
 

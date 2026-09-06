@@ -174,6 +174,23 @@ def _mk_extractors(bg):
         return (g[r][c], c)
     ex.append(("colpos", 6.0, colpos))
 
+    def dist(g, r, c, a):
+        """Distance to the nearest non-background cell (capped).
+
+        Rings, halos and "colour by how far you are" rules are all functions of
+        this and of nothing else local; without it they look like noise.
+        """
+        return (g[r][c], a["dist"][r][c])
+    ex.append(("dist", 5.5, dist))
+
+    def nearcol(g, r, c, a):
+        return (g[r][c], a["near"][r][c])
+    ex.append(("nearcol", 6.0, nearcol))
+
+    def distcol(g, r, c, a):
+        return (g[r][c], a["dist"][r][c], a["near"][r][c])
+    ex.append(("distcol", 7.0, distcol))
+
     def colorrank(g, r, c, a):
         return (g[r][c], a["crank"].get(g[r][c], -1))
     ex.append(("crank", 4.5, colorrank))
@@ -257,11 +274,38 @@ def _aux_build(g, bg):
             oshape[r][c] = key
             odims[r][c] = (dh, dw)
             orel[r][c] = (r - r0, c - c0, dh, dw)
-    return {"dims": (h, w), "rowsets": rowsets, "colsets": colsets,
+    dmap, nmap = _dist_maps(g, bg, h, w)
+    return {"dist": dmap, "near": nmap,
+            "dims": (h, w), "rowsets": rowsets, "colsets": colsets,
             "rowmode": rowmode, "colmode": colmode, "rays": rays,
             "rowuni": rowuni, "coluni": coluni, "rowbg": rowbg, "colbg": colbg,
             "ccount": hist, "crank": crank, "osize": osize, "oshape": oshape,
             "odims": odims, "orel": orel}
+
+
+def _dist_maps(g, bg, h, w):
+    """Multi-source BFS: distance to, and colour of, the nearest filled cell."""
+    from collections import deque
+    dist = [[9] * w for _ in range(h)]
+    near = [[OOB] * w for _ in range(h)]
+    q = deque()
+    for r in range(h):
+        for c in range(w):
+            if g[r][c] != bg:
+                dist[r][c] = 0
+                near[r][c] = g[r][c]
+                q.append((r, c))
+    while q:
+        cr, cc = q.popleft()
+        if dist[cr][cc] >= 6:
+            continue
+        for dr, dc in G.N4:
+            nr, nc = cr + dr, cc + dc
+            if 0 <= nr < h and 0 <= nc < w and dist[nr][nc] > dist[cr][cc] + 1:
+                dist[nr][nc] = dist[cr][cc] + 1
+                near[nr][nc] = near[cr][cc]
+                q.append((nr, nc))
+    return dist, near
 
 
 def _rays(g, bg, h, w):

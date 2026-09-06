@@ -52,13 +52,13 @@ def _load_default():
     if _REGISTRY:
         return
     from .solvers import (analogy, blocks, cascade, cellwise, colormap, compose,
-                          enumerate_dsl, geometry, objects_map, objwise, partition,
-                          patterns,
+                          enumerate_dsl, geometry, motion, objects_map, objwise,
+                          partition, patterns,
                           regions, rewrite, paint, panelabs, panelwise,
                           select, sequence, substitute, symmetry, tiling)
     for m in (geometry, colormap, partition, symmetry, tiling, blocks, select,
-              regions, cellwise, objects_map, substitute, sequence, paint,
-              patterns, analogy,
+              regions, cellwise, objects_map, motion, substitute, sequence,
+              paint, patterns, analogy,
               compose, panelabs, panelwise, objwise, rewrite, cascade,
               enumerate_dsl):
         register(m)

@@ -321,9 +321,19 @@ _ACTIVE = {"policy": None}
 
 
 def activate(policy):
+    """Make ``policy`` the one in force, or clear the engine back to stock.
+
+    Deactivating has to undo the DSL extension too: a worker process that has
+    already installed abstractions would otherwise keep searching with them
+    while reporting itself as the unmodified baseline, quietly contaminating
+    the paired comparison the whole loop rests on.
+    """
     _ACTIVE["policy"] = policy
     if policy is not None:
         policy.install()
+    else:
+        enum_core.clear_learned()
+        enum_core.OP_BIAS = {}
     portfolio.POLICY = policy
 
 

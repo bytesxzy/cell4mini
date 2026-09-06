@@ -313,3 +313,17 @@ class TestPolicySkips(unittest.TestCase):
         pol = learn.Policy({"module_skip": {"s": ["a", "b"]}})
         again = learn.Policy(pol.to_dict())
         self.assertEqual(again.module_skip, {"s": ["a", "b"]})
+
+
+class TestActivation(unittest.TestCase):
+    def test_deactivating_clears_learned_operators(self):
+        pol = learn.Policy({"abstractions": [
+            {"name": "abs_z", "ops": ["rot90", "crop"], "cost": 1.5}],
+            "op_bias": {"rot90": 1.0}})
+        learn.activate(pol)
+        self.assertTrue(enum_core.LEARNED)
+        self.assertTrue(enum_core.OP_BIAS)
+        learn.activate(None)
+        self.assertFalse(enum_core.LEARNED)
+        self.assertFalse(enum_core.OP_BIAS)
+        self.assertIsNone(portfolio.POLICY)

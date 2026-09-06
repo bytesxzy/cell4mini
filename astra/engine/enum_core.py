@@ -61,14 +61,33 @@ def seed_ops(ctx):
     """
     bg = ctx.bg
     pal = sorted(ctx.in_palette | ctx.out_palette)
-    ops = [("repair", 2.2, (lambda b=bg: lambda g: _repair_op(g, b))()),
+    ops = [("frame_in", 2.0, (lambda b=bg: lambda g: _frame_in(g, b))()),
+           ("frame_all", 2.2, (lambda b=bg: lambda g: _frame_all(g, b))()),
+           ("repair", 2.2, (lambda b=bg: lambda g: _repair_op(g, b))()),
            ("complete", 2.4, (lambda b=bg: lambda g: _complete_op(g, b))()),
            ("outline", 2.2, (lambda b=bg: lambda g: _halo_op(g, b, None))()),
            ("connect", 2.2, (lambda b=bg: lambda g: _connect_op(g, b))())]
     for c in pal:
         ops.append(("halo#%d" % c, 2.4,
                     (lambda c, b=bg: lambda g: _halo_op(g, b, c))(c)))
+        ops.append(("mark#%d" % c, 2.0,
+                    (lambda c, b=bg: lambda g: _mark(g, b, c))(c)))
     return ops
+
+
+def _frame_in(g, bg):
+    from .solvers.regions import _frame_interior
+    return _frame_interior(g, bg, "largest")
+
+
+def _frame_all(g, bg):
+    from .solvers.regions import _frame_content
+    return _frame_content(g, bg, "largest")
+
+
+def _mark(g, bg, c):
+    from .solvers.regions import _marked_rect
+    return _marked_rect(g, bg, c, False)
 
 
 def base_unary_ops(ctx, level="full"):
