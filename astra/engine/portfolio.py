@@ -53,10 +53,12 @@ def _load_default():
         return
     from .solvers import (analogy, blocks, cascade, cellwise, colormap, compose,
                           enumerate_dsl, geometry, objects_map, objwise, partition,
+                          patterns,
                           regions, rewrite, paint, panelabs, panelwise,
                           select, sequence, substitute, symmetry, tiling)
     for m in (geometry, colormap, partition, symmetry, tiling, blocks, select,
-              regions, cellwise, objects_map, substitute, sequence, paint, analogy,
+              regions, cellwise, objects_map, substitute, sequence, paint,
+              patterns, analogy,
               compose, panelabs, panelwise, objwise, rewrite, cascade,
               enumerate_dsl):
         register(m)
@@ -130,6 +132,11 @@ def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
                 mods = sorted(mods, key=lambda m: (
                     rank.get(getattr(m, "SOLVER", ""), 99),
                     _REGISTRY.index(m) if m in _REGISTRY else 99))
+            skip = POLICY.skips_for(sigs)
+            if skip:
+                kept = [m for m in mods if getattr(m, "SOLVER", "") not in skip]
+                if kept:
+                    mods = kept
         except Exception:
             bias = {}
 

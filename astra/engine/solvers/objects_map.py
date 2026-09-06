@@ -126,9 +126,21 @@ def _bg_candidates(ctx):
     for c, _n in cnt.most_common(3):
         if c not in cands and all(c in G.palette(a) for a in ctx.all_inputs):
             cands.append(c)
+    # A colour that rules the grid as a lattice is the most likely "wall", and
+    # it is not always among the most frequent -- a thin grid of lines is a
+    # small fraction of the cells.
+    try:
+        from .partition import sep_color_of
+        seps = {sep_color_of(a) for a in ctx.all_inputs}
+        if len(seps) == 1:
+            sc = seps.pop()
+            if sc is not None and sc not in cands:
+                cands.append(sc)
+    except Exception:
+        pass
     if ctx.bg_varies:
         cands.append(None)          # resolve the background per grid
-    return cands[:4]
+    return cands[:5]
 
 
 def _learn(ctx, seg, bg, keys):

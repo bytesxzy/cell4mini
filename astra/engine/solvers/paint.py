@@ -18,6 +18,9 @@ from ..task import Hyp
 
 SOLVER = "sequence"
 
+DIRS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+DIAG = {"ul": (-1, -1), "ur": (-1, 1), "dl": (1, -1), "dr": (1, 1)}
+
 
 def _h(n, f, c):
     return Hyp(n, f, c, SOLVER)
@@ -176,6 +179,97 @@ def _connect_to_anchor(g, bg, seg, anchor_mode):
                     for r in span:
                         out[r][c] = v
                         drawn = True
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
+# --- move satellites onto the anchor ---------------------------------------
+
+def _move_to_anchor(g, bg, seg, diag_touch, keep_anchor):
+    """Slide every satellite object straight at the anchor until it touches.
+
+    Distinct from gravity (which has a fixed direction) and from the anchor
+    *line* rule (which draws rather than moves): the direction is per object,
+    read off the geometry, and the object arrives intact.
+    """
+    bg = G.bg_or(g, bg)
+    objs = O.segment(g, seg, bg)
+    if len(objs) < 2 or len(objs) > 40:
+        return None
+    anchor = max(objs, key=lambda o: (o.size, o.bbox_area))
+    if anchor.size < 2:
+        return None
+    h, w = G.dims(g)
+    occupied = set(anchor.cells)
+    out = [[bg] * w for _ in range(h)]
+    for r, c in anchor.cells:
+        out[r][c] = g[r][c]
+    nb = G.N8 if diag_touch else G.N4
+    moved = False
+    for o in sorted(objs, key=lambda o: -min(
+            abs(o.r0 - anchor.r0) + abs(o.c0 - anchor.c0), 10 ** 6)):
+        if o is anchor:
+            continue
+        # Direction by band overlap, not by centre distance: an object already
+        # lined up with the anchor's columns must travel straight, and a
+        # centre comparison nudges it diagonally instead.
+        if o.r1 < anchor.r0:
+            dr = 1
+        elif o.r0 > anchor.r1:
+            dr = -1
+        else:
+            dr = 0
+        if o.c1 < anchor.c0:
+            dc = 1
+        elif o.c0 > anchor.c1:
+            dc = -1
+        else:
+            dc = 0
+        if dr == 0 and dc == 0:
+            return None
+        best = 0
+        step = 0
+        while step < 60:
+            cells = [(r + dr * step, c + dc * step) for r, c in o.cells]
+            if not all(0 <= r < h and 0 <= c < w for r, c in cells):
+                break
+            if any((r, c) in occupied for r, c in cells):
+                break
+            touching = any((r + a, c + b) in occupied
+                           for r, c in cells for a, b in nb)
+            best = step
+            if touching:
+                break
+            step += 1
+        cells = [(r + dr * best, c + dc * best) for r, c in o.cells]
+        for (nr, nc), (r, c) in zip(cells, o.cells):
+            out[nr][nc] = g[r][c]
+            occupied.add((nr, nc))
+        if best:
+            moved = True
+    return tuple(tuple(r) for r in out) if moved else None
+
+
+# --- striped rays ----------------------------------------------------------
+
+def _ray_striped(g, bg, dr, dc, alt, period):
+    """A trail that alternates between the source colour and a second colour."""
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    src = [(r, c, g[r][c]) for r in range(h) for c in range(w) if g[r][c] != bg]
+    if not src or len(src) > 60:
+        return None
+    out = [list(r) for r in g]
+    drawn = False
+    for r, c, v in src:
+        k = 1
+        nr, nc = r + dr, c + dc
+        while 0 <= nr < h and 0 <= nc < w:
+            if g[nr][nc] == bg:
+                out[nr][nc] = alt if (k % period) else v
+                drawn = True
+            nr += dr
+            nc += dc
+            k += 1
     return tuple(tuple(r) for r in out) if drawn else None
 
 
@@ -417,7 +511,7 @@ def _voronoi(g, bg, diag, tie_bg):
     return tuple(out)
 
 
-def _fill_enclosed(g, bg, diag):
+def _fill_enclosed(g, bg, diag, color=None, only_rect=False):
     """Paint each enclosed background pocket with the colour that encloses it."""
     from collections import deque
     bg = G.bg_or(g, bg)
@@ -468,7 +562,11 @@ def _fill_enclosed(g, bg, diag):
                         border[g[nr][nc]] += 1
             if not border:
                 continue
-            col = border.most_common(1)[0][0]
+            if only_rect:
+                r0, c0, r1, c1 = G.bbox_of(comp)
+                if len(comp) != (r1 - r0 + 1) * (c1 - c0 + 1):
+                    continue
+            col = color if color is not None else border.most_common(1)[0][0]
             for cr, cc in comp:
                 out[cr][cc] = col
                 drawn = True
@@ -624,6 +722,21 @@ def _rules(ctx, bg):
         res.append(_h("fill_enclosed%d" % diag,
                       (lambda d, bg: lambda g: _fill_enclosed(g, bg, d))(diag, bg),
                       4.2))
+        for c in sorted(ctx.out_palette):
+            for rect in (False, True):
+                res.append(_h("fill_enclosed%d#%d%s" % (diag, c, "r" if rect else ""),
+                              (lambda d, c, r, bg: lambda g: _fill_enclosed(g, bg, d, c, r))(diag, c, rect, bg),
+                              4.6))
+    for seg in ("c8", "m8", "c4"):
+        for dt in (True, False):
+            res.append(_h("moveanchor_%s%d" % (seg, dt),
+                          (lambda s, d, bg: lambda g: _move_to_anchor(g, bg, s, d, True))(seg, dt, bg),
+                          4.8))
+    for dn, (dr, dc) in list(DIRS.items()) + list(DIAG.items()):
+        for alt in sorted(ctx.out_palette):
+            res.append(_h("stripe_%s#%d" % (dn, alt),
+                          (lambda v, a, bg: lambda g: _ray_striped(g, bg, v[0], v[1], a, 2))((dr, dc), alt, bg),
+                          5.6))
     for seg in ("c8", "m8"):
         for both in (True, False):
             res.append(_h("repeat_%s%d" % (seg, both),

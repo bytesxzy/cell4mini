@@ -287,3 +287,29 @@ class TestHarness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPolicySkips(unittest.TestCase):
+    def test_skips_need_votes_and_no_contrary_evidence(self):
+        recs = []
+        for i in range(14):
+            recs.append({"sigs": ["shape:same", "bg:0"], "solved": 1,
+                         "solver": "geometry", "program": None, "time": 0.1})
+        pol = learn.fit(recs)
+        # only one family has ever been seen solving, so nothing is dead yet
+        self.assertEqual(pol.module_skip, {})
+        recs += [{"sigs": ["shape:same", "bg:0"], "solved": 1,
+                  "solver": "cellwise", "program": None, "time": 0.1}]
+        recs += [{"sigs": ["shape:diff", "bg:0"], "solved": 1,
+                  "solver": "select", "program": None, "time": 0.1}
+                 for _ in range(13)]
+        pol2 = learn.fit(recs)
+        # "select" never solved a shape:same task, so it is a skip candidate
+        self.assertIn("select", pol2.module_skip.get("shape:same", []))
+        # but a family with a bias entry at one of the task's signatures stays
+        self.assertNotIn("geometry", pol2.skips_for(("shape:same", "bg:0")))
+
+    def test_policy_round_trip_keeps_skips(self):
+        pol = learn.Policy({"module_skip": {"s": ["a", "b"]}})
+        again = learn.Policy(pol.to_dict())
+        self.assertEqual(again.module_skip, {"s": ["a", "b"]})

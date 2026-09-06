@@ -121,6 +121,7 @@ class Policy:
         self.abstractions = list(d.get("abstractions", []))
         self.op_bias = dict(d.get("op_bias", {}))
         self.module_order = list(d.get("module_order", []))
+        self.module_skip = {k: list(v) for k, v in d.get("module_skip", {}).items()}
         self.meta = dict(d.get("meta", {}))
 
     def to_dict(self):
@@ -129,6 +130,7 @@ class Policy:
                 "abstractions": self.abstractions,
                 "op_bias": self.op_bias,
                 "module_order": self.module_order,
+                "module_skip": self.module_skip,
                 "meta": self.meta}
 
     def save(self, path=POLICY_PATH):
@@ -154,6 +156,18 @@ class Policy:
             out[fam] += v
         # clamp so a learned bias can reorder but never silence a family
         return {k: max(-3.0, min(3.0, v)) for k, v in out.items()}
+
+    def skips_for(self, sigs, min_votes=2):
+        """Families to leave out entirely for a task with these signatures."""
+        votes = Counter()
+        for s in sigs:
+            for f in self.module_skip.get(s, ()):
+                votes[f] += 1
+        alive = set()
+        for s in sigs:
+            for f in self.feature_bias.get(s, {}):
+                alive.add(f)
+        return {f for f, v in votes.items() if v >= min_votes and f not in alive}
 
     def install(self):
         """Install abstractions and operator bias into the enumerator."""
@@ -221,6 +235,24 @@ def fit(records, prev=None, min_count=2, bias_weight=1.2,
         fb[s] = row
     pol.feature_bias = fb
 
+    # --- learned skips: reclaim time from families that never pay off ------
+    # A family that has produced nothing across many tasks carrying a given
+    # signature is not merely unlikely there -- it is spending budget that the
+    # productive families could use.  Skipping is gated like everything else,
+    # so a skip that costs a solve is rejected by the paired test.
+    fams = set()
+    for r in records:
+        if r.get("solver"):
+            fams.add(r["solver"])
+    skips = {}
+    for s, n in tot.items():
+        if n < 12:
+            continue
+        dead = sorted(f for f in fams if hit.get(s, {}).get(f, 0) == 0)
+        if dead:
+            skips[s] = dead[:6]
+    pol.module_skip = skips
+
     # --- global family yield --------------------------------------------
     solved_by = Counter(r["solver"] for r in records if r["solved"] and r.get("solver"))
     n_solved = sum(solved_by.values()) or 1
@@ -273,7 +305,8 @@ def fit(records, prev=None, min_count=2, bias_weight=1.2,
     order = sorted(solved_by, key=lambda f: -(solved_by[f] / (1.0 + cost_by[f])))
     pol.module_order = order
 
-    pol.meta = {"n_records": len(records),
+    pol.meta = {"n_skip_signatures": len(pol.module_skip),
+                "n_records": len(records),
                 "n_solved": sum(1 for r in records if r["solved"]),
                 "n_abstractions": len(pol.abstractions),
                 "n_signatures": len(fb)}

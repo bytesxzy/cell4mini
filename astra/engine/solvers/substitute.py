@@ -127,7 +127,7 @@ def generate(ctx):
 
 def _rules(ctx, bg):
     res = []
-    for seg in ("c8", "m8", "c4"):
+    for seg in ("c8", "m8", "c4", "cells"):
         if ctx.timed_out():
             break
         for kind in _KEYS:
