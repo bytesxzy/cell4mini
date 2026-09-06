@@ -94,7 +94,8 @@ class _ObjRule:
         self.default = default
 
     def __call__(self, g):
-        objs, feats = O.features_of(g, self.seg, self.bg)
+        bg = G.bg_or(g, self.bg)
+        objs, feats = O.features_of(g, self.seg, bg)
         if not objs or len(objs) > 120:
             return None
         out = [list(r) for r in g]
@@ -106,7 +107,7 @@ class _ObjRule:
             act = self.table.get(k, self.default)
             if act is None:
                 return None
-            _do(out, g, o, act, self.bg)
+            _do(out, g, o, act, bg)
         return tuple(tuple(r) for r in out)
 
 
@@ -125,7 +126,9 @@ def _bg_candidates(ctx):
     for c, _n in cnt.most_common(3):
         if c not in cands and all(c in G.palette(a) for a in ctx.all_inputs):
             cands.append(c)
-    return cands[:3]
+    if ctx.bg_varies:
+        cands.append(None)          # resolve the background per grid
+    return cands[:4]
 
 
 def _learn(ctx, seg, bg, keys):
@@ -138,7 +141,7 @@ def _learn(ctx, seg, bg, keys):
         if not objs or len(objs) > 120:
             return None
         for i, o in enumerate(objs):
-            act = _read_action(a, b, o, bg)
+            act = _read_action(a, b, o, G.bg_or(a, bg))
             if act is None:
                 return None
             k = (o.norm_key(),) if keys == (_SHAPE_KEY,) else tuple(feats[i][x] for x in keys)
@@ -174,18 +177,20 @@ def generate(ctx):
              ("color", "border"), ("ncolors", "size")]
     for bi, sbg in enumerate(_bg_candidates(ctx)):
         extra = 0.0 if bi == 0 else 1.0
+        if sbg is None:
+            extra = 0.5
         for seg in _SEGS:
             if ctx.timed_out():
                 break
             for keys in singles:
                 r = _learn(ctx, seg, sbg, keys)
                 if r is not None:
-                    res.append(_h("%s@%d.by_%s" % (seg, sbg, "+".join(keys)), r,
+                    res.append(_h("%s@%s.by_%s" % (seg, sbg, "+".join(keys)), r,
                                   3.5 + extra + 0.05 * len(r.table)))
             for keys in pairs:
                 r = _learn(ctx, seg, sbg, keys)
                 if r is not None:
-                    res.append(_h("%s@%d.by_%s" % (seg, sbg, "+".join(keys)), r,
+                    res.append(_h("%s@%s.by_%s" % (seg, sbg, "+".join(keys)), r,
                                   5.0 + extra + 0.05 * len(r.table)))
     res.extend(_bbox_rules(ctx, bg))
     return res
@@ -217,6 +222,7 @@ def _count_outputs(ctx, bg):
 
 
 def _count_grid(g, f, shape, cmode, bg):
+    bg = G.bg_or(g, bg)
     n = f(g, bg)
     if n < 1 or n > 30:
         return None
@@ -259,6 +265,7 @@ def _bbox_rules(ctx, bg):
 
 
 def _bbox_render(g, seg, mode, bg):
+    bg = G.bg_or(g, bg)
     objs = O.segment(g, seg, bg)
     if not objs or len(objs) > 120:
         return None

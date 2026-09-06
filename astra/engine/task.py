@@ -92,6 +92,19 @@ class Ctx:
         return self.memo("bg", f)
 
     @property
+    def bg_varies(self):
+        """True when the grids do not share one background colour.
+
+        Several ARC tasks draw each example on a different coloured field.  A
+        single task-level background is then wrong for most of them, and every
+        object-level rule silently segments the wrong thing.  Solvers respond
+        by also offering ``bg=None`` variants, which resolve the background per
+        grid at call time.
+        """
+        return self.memo("bgvar", lambda: len(
+            {G.background(a) for a in self.all_inputs}) > 1)
+
+    @property
     def in_palette(self):
         return self.memo("inpal", lambda: set().union(
             *[G.palette(a) for a in self.all_inputs]))

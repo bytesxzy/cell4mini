@@ -89,6 +89,7 @@ def _is_same(patch):
 
 
 def _apply(g, seg, kind, table, bg, over_input):
+    bg = G.bg_or(g, bg)
     objs = O.segment(g, seg, bg)
     if not objs or len(objs) > 60:
         return None
@@ -118,7 +119,13 @@ def _apply(g, seg, kind, table, bg, over_input):
 def generate(ctx):
     if not ctx.same_shape:
         return []
-    bg = ctx.bg
+    res = []
+    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+        res.extend(_rules(ctx, bg))
+    return res
+
+
+def _rules(ctx, bg):
     res = []
     for seg in ("c8", "m8", "c4"):
         if ctx.timed_out():

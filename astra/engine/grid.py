@@ -138,6 +138,11 @@ def background(g):
     return mc
 
 
+def bg_or(g, bg):
+    """Resolve a background: an explicit colour, or infer it from this grid."""
+    return background(g) if bg is None else bg
+
+
 def count_color(g, c):
     n = 0
     for row in g:
@@ -524,6 +529,7 @@ def cellwise(a, b, fn):
 
 def gravity(g, bg, direction):
     """Slide every non-bg cell as far as it can go, column/row-wise."""
+    bg = bg_or(g, bg)
     h, w = dims(g)
     if direction in ("down", "up"):
         cols = []
@@ -541,6 +547,7 @@ def gravity(g, bg, direction):
 
 
 def translate(g, dr, dc, fill):
+    fill = bg_or(g, fill)
     h, w = dims(g)
     out = [[fill] * w for _ in range(h)]
     for r in range(h):

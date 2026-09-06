@@ -75,6 +75,42 @@ def panels_even(g, ky, kx):
              for j in range(kx)] for i in range(ky)]
 
 
+def sep_color_of(g):
+    """The colour ``panels_auto`` would use to cut this grid."""
+    best = None
+    for c in G.palette(g):
+        rows, cols = _sep_lines(g, c)
+        if not rows and not cols:
+            continue
+        if not panels_by_separator(g, c):
+            continue
+        score = (len(rows) + len(cols), -c)
+        if best is None or score > best[0]:
+            best = (score, c)
+    return best[1] if best else None
+
+
+def panels_auto(g):
+    """Decompose using whichever colour rules this grid, chosen per grid.
+
+    The separator colour is not always shared across a task's examples -- the
+    same lattice can be drawn in a different colour in every grid -- so a
+    task-wide separator colour finds nothing at all on those tasks.
+    """
+    best = None
+    for c in G.palette(g):
+        rows, cols = _sep_lines(g, c)
+        if not rows and not cols:
+            continue
+        mat = panels_by_separator(g, c)
+        if not mat:
+            continue
+        score = (len(rows) + len(cols), -c)
+        if best is None or score > best[0]:
+            best = (score, mat)
+    return best[1] if best else None
+
+
 def _flat(mat):
     return [p for row in mat for p in row if p is not None]
 
@@ -97,6 +133,8 @@ def _decompositions(ctx):
     for c in _sep_color_candidates(ctx):
         out.append(("sep#%d" % c, 3.0,
                     (lambda c: lambda g: panels_by_separator(g, c))(c)))
+    if all(panels_auto(a) for a in ctx.all_inputs):
+        out.append(("sep_auto", 3.2, panels_auto))
     shapes = {G.dims(a) for a in ctx.all_inputs}
     for ky in (1, 2, 3, 4):
         for kx in (1, 2, 3, 4):

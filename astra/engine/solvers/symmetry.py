@@ -69,15 +69,25 @@ def _candidate_maps(h, w):
     return maps
 
 
-def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT):
+def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT, min_pairs=6):
+    """Fill unknown cells from the symmetry group the observed cells witness.
+
+    Maps are adopted *incrementally, best-supported first*, and a map is
+    committed only if merging its orbits keeps every orbit single-valued.  An
+    all-or-nothing version (adopt every non-contradicting map, then check) is
+    far more fragile: one coincidental map -- a diagonal translation that
+    happens to line up on three cells -- merges two genuine orbits and destroys
+    an otherwise perfect reconstruction.  Here that map is simply declined.
+    """
     h, w = G.dims(g)
     n = h * w
-    known = [g[r][c] != unknown for r in range(h) for c in range(w)]
+    flat = [g[r][c] for r in range(h) for c in range(w)]
+    known = [v != unknown for v in flat]
     nk = sum(known)
-    if nk == n or nk < 4:
+    if nk == n or nk < 3:
         return None
-    dsu = _DSU(n)
-    accepted = 0
+
+    cands = []
     for _name, f in _candidate_maps(h, w):
         pairs = 0
         bad = False
@@ -98,38 +108,103 @@ def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT):
                 links.append((i, j))
                 if known[i] and known[j]:
                     pairs += 1
-                    if g[r][c] != g[tr][tc]:
+                    if flat[i] != flat[j]:
                         bad = True
                         break
             if bad:
                 break
-        if bad or pairs < max(6, int(min_support * nk)):
+        if bad or pairs < max(min_pairs, int(min_support * nk)):
             continue
-        accepted += 1
-        for i, j in links:
-            dsu.union(i, j)
-    if not accepted:
+        cands.append((pairs, links))
+    if not cands:
         return None
+    cands.sort(key=lambda t: -t[0])
+
+    parent = list(range(n))
+
+    def find(x, p=parent):
+        while p[x] != x:
+            p[x] = p[p[x]]
+            x = p[x]
+        return x
+
     vals = {}
     for i in range(n):
         if known[i]:
-            root = dsu.find(i)
-            v = g[i // w][i % w]
-            prev = vals.get(root)
-            if prev is None:
-                vals[root] = v
-            elif prev != v:
-                return None
+            vals[i] = flat[i]
+
+    for _pairs, links in cands:
+        trial = parent[:]
+
+        def tfind(x, p=trial):
+            while p[x] != x:
+                p[x] = p[p[x]]
+                x = p[x]
+            return x
+
+        tvals = dict(vals)
+        ok = True
+        for i, j in links:
+            ri, rj = tfind(i), tfind(j)
+            if ri == rj:
+                continue
+            vi, vj = tvals.get(ri), tvals.get(rj)
+            if vi is not None and vj is not None and vi != vj:
+                ok = False
+                break
+            trial[rj] = ri
+            if vi is None and vj is not None:
+                tvals[ri] = vj
+            tvals.pop(rj, None)
+        if ok:
+            parent[:] = trial
+            vals = tvals
+
     out = [[g[r][c] for c in range(w)] for r in range(h)]
+    filled = False
     for i in range(n):
         if not known[i]:
-            v = vals.get(dsu.find(i))
+            v = vals.get(find(i))
             if v is None:
                 if strict:
                     return None
                 continue
             out[i // w][i % w] = v
+            filled = True
+    if not filled and strict:
+        return None
     return tuple(tuple(r) for r in out)
+
+
+def _repair_bounded(g, unknown, strict=False, min_support=0.0, min_pairs=2,
+                    grow=0):
+    """Complete a pattern, but only inside the region it already occupies.
+
+    Unbounded completion of a sparse motif tiles the whole grid, which is
+    almost never what the task wants: the pattern is meant to be finished, not
+    repeated forever.  Restricting the writes to the bounding box of the
+    observed cells is the difference between "make this symmetric" and "wallpaper
+    the canvas".
+    """
+    rep = _repair(g, unknown, strict, min_support, min_pairs)
+    if rep is None:
+        return None
+    cells = [(r, c) for r, row in enumerate(g) for c, v in enumerate(row)
+             if v != unknown]
+    if not cells:
+        return None
+    h, w = G.dims(g)
+    r0, c0, r1, c1 = G.bbox_of(cells)
+    r0, c0 = max(0, r0 - grow), max(0, c0 - grow)
+    r1, c1 = min(h - 1, r1 + grow), min(w - 1, c1 + grow)
+    out = [list(row) for row in g]
+    changed = False
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            if g[r][c] == unknown and rep[r][c] != unknown:
+                out[r][c] = rep[r][c]
+                changed = True
+    return tuple(tuple(r) for r in out) if changed else None
 
 
 def _occluded_bbox(g, unknown):
@@ -140,8 +215,8 @@ def _occluded_bbox(g, unknown):
     return G.bbox_of(cells)
 
 
-def _patch(g, unknown, strict=True):
-    rep = _repair(g, unknown, strict)
+def _patch(g, unknown, strict=True, min_support=MIN_SUPPORT, min_pairs=6):
+    rep = _repair(g, unknown, strict, min_support, min_pairs)
     if rep is None:
         return None
     bb = _occluded_bbox(g, unknown)
@@ -196,4 +271,21 @@ def generate(ctx):
                       (lambda u: lambda g: _repair(g, u, True, 0.12))(u), 5.0))
         res.append(_h("patch_loose#%d" % u,
                       (lambda u: lambda g: _patch(g, u, True))(u), 5.2))
+        # Sparse mode: complete a pattern that is not yet symmetric, where only
+        # a handful of cell pairs witness each axis.  A wrongly accepted axis
+        # cannot survive validation on the training pairs, so the floor can be
+        # low here in a way it must not be for occlusion repair.
+        for strict in (False, True):
+            res.append(_h("complete#%d%s" % (u, "" if strict else "_lax"),
+                          (lambda u, s: lambda g: _repair(g, u, s, 0.0, 2))(u, strict),
+                          5.5 if strict else 6.0))
+        res.append(_h("complete_patch#%d" % u,
+                      (lambda u: lambda g: _patch(g, u, True, 0.0, 2))(u), 6.0))
+        for grow in (0, 1):
+            res.append(_h("complete_box#%d+%d" % (u, grow),
+                          (lambda u, gr: lambda g: _repair_bounded(g, u, False, 0.0, 2, gr))(u, grow),
+                          4.8 + 0.3 * grow))
+            res.append(_h("complete_box_s#%d+%d" % (u, grow),
+                          (lambda u, gr: lambda g: _repair_bounded(g, u, False, 0.25, 4, gr))(u, grow),
+                          5.0 + 0.3 * grow))
     return res

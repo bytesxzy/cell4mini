@@ -83,6 +83,7 @@ def _placements(grid, patch, frag, bg, h, w):
 
 
 def _complete(grid, bg, seg, pick, scales, keep_exemplar):
+    bg = G.bg_or(grid, bg)
     objs = O.segment(grid, seg, bg)
     if len(objs) < 2 or len(objs) > MAX_OBJ:
         return None
@@ -140,7 +141,13 @@ def _complete(grid, bg, seg, pick, scales, keep_exemplar):
 def generate(ctx):
     if not ctx.same_shape:
         return []
-    bg = ctx.bg
+    res = []
+    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+        res.extend(_rules(ctx, bg))
+    return res
+
+
+def _rules(ctx, bg):
     res = []
     sizes = {G.area(a) for a in ctx.all_inputs}
     scale_sets = [(1,)]

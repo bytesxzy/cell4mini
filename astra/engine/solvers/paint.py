@@ -26,6 +26,7 @@ def _h(n, f, c):
 # --- extend segments -------------------------------------------------------
 
 def _extend_lines(g, bg, both, stop):
+    bg = G.bg_or(g, bg)
     h, w = G.dims(g)
     out = [list(r) for r in g]
     drawn = False
@@ -61,6 +62,7 @@ def _extend_lines(g, bg, both, stop):
 # --- rectangle from corners ------------------------------------------------
 
 def _rect_from_corners(g, bg, fill, outline_only):
+    bg = G.bg_or(g, bg)
     pts = {}
     for r, row in enumerate(g):
         for c, v in enumerate(row):
@@ -97,6 +99,7 @@ def _axis_lines(g):
 
 
 def _reflect_across(g, bg, use_row, overwrite):
+    bg = G.bg_or(g, bg)
     rows, cols = _axis_lines(g)
     idx = rows if use_row else cols
     if len(idx) != 1:
@@ -122,9 +125,64 @@ def _reflect_across(g, bg, use_row, overwrite):
     return tuple(tuple(r) for r in out) if drawn else None
 
 
+# --- connect small objects to a big one -----------------------------------
+
+def _connect_to_anchor(g, bg, seg, anchor_mode):
+    """Each satellite aligned with the anchor object grows a line towards it.
+
+    "Aligned" means the satellite's row or column band overlaps the anchor's;
+    satellites that are not aligned are deliberately left untouched, which is
+    what distinguishes this from a plain ray.
+    """
+    bg = G.bg_or(g, bg)
+    objs = O.segment(g, seg, bg)
+    if len(objs) < 2 or len(objs) > 40:
+        return None
+    if anchor_mode == "largest":
+        anchor = max(objs, key=lambda o: (o.size, o.bbox_area))
+    else:
+        anchor = max(objs, key=lambda o: (o.bbox_area, o.size))
+    h, w = G.dims(g)
+    out = [list(r) for r in g]
+    drawn = False
+    for o in objs:
+        if o is anchor:
+            continue
+        v = o.color
+        # horizontal alignment
+        rows = range(max(o.r0, anchor.r0), min(o.r1, anchor.r1) + 1)
+        if rows:
+            if o.c0 > anchor.c1:
+                span = range(anchor.c1 + 1, o.c0)
+            elif o.c1 < anchor.c0:
+                span = range(o.c1 + 1, anchor.c0)
+            else:
+                span = ()
+            for r in rows:
+                if all(g[r][c] == bg for c in span):
+                    for c in span:
+                        out[r][c] = v
+                        drawn = True
+        cols = range(max(o.c0, anchor.c0), min(o.c1, anchor.c1) + 1)
+        if cols:
+            if o.r0 > anchor.r1:
+                span = range(anchor.r1 + 1, o.r0)
+            elif o.r1 < anchor.r0:
+                span = range(o.r1 + 1, anchor.r0)
+            else:
+                span = ()
+            for c in cols:
+                if all(g[r][c] == bg for r in span):
+                    for r in span:
+                        out[r][c] = v
+                        drawn = True
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
 # --- symmetrise each object -----------------------------------------------
 
 def _symmetrise(g, bg, seg, mode):
+    bg = G.bg_or(g, bg)
     objs = O.segment(g, seg, bg)
     if not objs or len(objs) > 60:
         return None
@@ -149,10 +207,72 @@ def _symmetrise(g, bg, seg, mode):
     return tuple(tuple(r) for r in out) if drawn else None
 
 
+_RAY_MODES = ("none", "h", "v", "both")
+
+
+def _color_rays(g, bg, assign, mode_order):
+    """Each colour emits rays in the directions its own colour dictates.
+
+    A single global direction cannot express "dots of this colour draw rows and
+    dots of that colour draw columns", which is a whole ARC family on its own.
+    Later colours overwrite earlier ones, so the draw order is part of the rule.
+    """
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    out = [list(r) for r in g]
+    src = [(r, c, g[r][c]) for r in range(h) for c in range(w) if g[r][c] != bg]
+    if not src or len(src) > 120:
+        return None
+    drawn = False
+    # Draw order is by *direction*, not by colour: where a row line crosses a
+    # column line, which one shows through is a property of the two directions.
+    for want in mode_order:
+        for r, c, v in src:
+            mode = assign.get(v, "none")
+            if mode != want:
+                continue
+            if mode in ("h", "both"):
+                for cc in range(w):
+                    if g[r][cc] == bg:
+                        out[r][cc] = v
+                        drawn = True
+            if mode in ("v", "both"):
+                for rr in range(h):
+                    if g[rr][c] == bg:
+                        out[rr][c] = v
+                        drawn = True
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
+def _ray_assignments(colors):
+    # 4^k assignments: past three colours this stops being a search and starts
+    # being a way to spend the whole budget on one family
+    if not colors or len(colors) > 3:
+        return []
+    out = [{}]
+    for col in colors:
+        nxt = []
+        for base in out:
+            for m in _RAY_MODES:
+                d = dict(base)
+                d[col] = m
+                nxt.append(d)
+        out = nxt
+        if len(out) > 300:
+            return out
+    return [a for a in out if any(v != "none" for v in a.values())]
+
+
 def generate(ctx):
     if not ctx.same_shape:
         return []
-    bg = ctx.bg
+    res = []
+    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+        res.extend(_rules(ctx, bg))
+    return res
+
+
+def _rules(ctx, bg):
     res = []
     for both in (True, False):
         for stop in (True, False):
@@ -172,6 +292,21 @@ def generate(ctx):
             res.append(_h("reflect_%s%d" % ("row" if use_row else "col", ov),
                           (lambda u, o, bg: lambda g: _reflect_across(g, bg, u, o))(use_row, ov, bg),
                           4.5))
+    cols = sorted(ctx.in_palette - {bg if bg is not None else -1})
+    busiest = max((sum(1 for r in a for v in r if v != G.bg_or(a, bg))
+                   for a in ctx.all_inputs), default=0)
+    orders = (("v", "both", "h"), ("h", "both", "v"))
+    for assign in (_ray_assignments(cols) if busiest <= 40 else []):
+        for oi, order in enumerate(orders):
+            res.append(_h("rays_%s%d" % ("".join("%d%s" % (k, v[0]) for k, v in
+                                                 sorted(assign.items())), oi),
+                          (lambda a, o, bg: lambda g: _color_rays(g, bg, a, o))(assign, order, bg),
+                          5.5 + 0.2 * sum(1 for v in assign.values() if v != "none")))
+    for seg in ("c8", "m8", "c4"):
+        for am in ("largest", "bbox"):
+            res.append(_h("anchor_%s_%s" % (seg, am),
+                          (lambda s, a, bg: lambda g: _connect_to_anchor(g, bg, s, a))(seg, am, bg),
+                          4.6))
     for seg in ("c8", "m8"):
         for mode in ("h", "v", "both"):
             res.append(_h("symmetrise_%s_%s" % (seg, mode),

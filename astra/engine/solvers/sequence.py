@@ -23,6 +23,7 @@ def _h(n, f, c):
 # --- gravity with collision ------------------------------------------------
 
 def _move_objects(g, seg, bg, d, once=False):
+    bg = G.bg_or(g, bg)
     dr, dc = DIRS[d]
     objs = O.segment(g, seg, bg)
     if not objs or len(objs) > 60:
@@ -65,6 +66,7 @@ def _move_objects(g, seg, bg, d, once=False):
 # --- rays ------------------------------------------------------------------
 
 def _rays(g, bg, dirs, stop_at_obstacle, color_mode, only_color=None):
+    bg = G.bg_or(g, bg)
     h, w = G.dims(g)
     out = [list(r) for r in g]
     src = [(r, c, g[r][c]) for r in range(h) for c in range(w) if g[r][c] != bg]
@@ -88,7 +90,8 @@ def _rays(g, bg, dirs, stop_at_obstacle, color_mode, only_color=None):
 
 # --- connect equal-coloured pairs -----------------------------------------
 
-def _connect(g, bg, fill_mode, diag=False):
+def _connect(g, bg, fill_mode, diag=False, max_gap=None):
+    bg = G.bg_or(g, bg)
     h, w = G.dims(g)
     out = [list(r) for r in g]
     pts = {}
@@ -105,6 +108,10 @@ def _connect(g, bg, fill_mode, diag=False):
             for j in range(i + 1, len(ps)):
                 (r1, c1), (r2, c2) = ps[i], ps[j]
                 cells = None
+                if max_gap is not None:
+                    d = max(abs(r2 - r1), abs(c2 - c1)) - 1
+                    if d > max_gap:
+                        continue
                 if r1 == r2 and abs(c2 - c1) > 1:
                     cells = [(r1, c) for c in range(min(c1, c2) + 1, max(c1, c2))]
                 elif c1 == c2 and abs(r2 - r1) > 1:
@@ -130,6 +137,7 @@ def _connect(g, bg, fill_mode, diag=False):
 # --- outline / halo --------------------------------------------------------
 
 def _halo(g, bg, color, diag, replace):
+    bg = G.bg_or(g, bg)
     h, w = G.dims(g)
     out = [list(r) for r in g]
     nb = G.N8 if diag else G.N4
@@ -150,10 +158,16 @@ def _halo(g, bg, color, diag, replace):
 
 
 def generate(ctx):
-    res = []
-    bg = ctx.bg
     if not ctx.same_shape:
-        return res
+        return []
+    res = []
+    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+        res.extend(_rules(ctx, bg))
+    return res
+
+
+def _rules(ctx, bg):
+    res = []
     for seg in ("c4", "c8", "m8"):
         for d in DIRS:
             res.append(_h("move_%s_%s" % (seg, d),
@@ -174,13 +188,15 @@ def generate(ctx):
                       (lambda v, bg: lambda g: _rays(g, bg, (v,), True, None))((dr, dc), bg),
                       4.5))
     for diag in (False, True):
-        res.append(_h("connect%s" % ("_d" if diag else ""),
-                      (lambda d, bg: lambda g: _connect(g, bg, None, d))(diag, bg),
-                      4.0))
-        for c in sorted(ctx.out_palette):
-            res.append(_h("connect%s#%d" % ("_d" if diag else "", c),
-                          (lambda d, c, bg: lambda g: _connect(g, bg, c, d))(diag, c, bg),
-                          5.0))
+        for gap in (None, 1, 2):
+            sfx = ("_d" if diag else "") + ("" if gap is None else "_g%d" % gap)
+            res.append(_h("connect" + sfx,
+                          (lambda d, bg, gp: lambda g: _connect(g, bg, None, d, gp))(diag, bg, gap),
+                          4.0 if gap is None else 4.4))
+            for c in sorted(ctx.out_palette):
+                res.append(_h("connect%s#%d" % (sfx, c),
+                              (lambda d, c, bg, gp: lambda g: _connect(g, bg, c, d, gp))(diag, c, bg, gap),
+                              5.0 if gap is None else 5.4))
     for diag in (False, True):
         res.append(_h("halo%s" % ("8" if diag else "4"),
                       (lambda d, bg: lambda g: _halo(g, bg, None, d, False))(diag, bg),

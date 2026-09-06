@@ -77,8 +77,13 @@ def _pick(grid, seg, sel, bg):
 
 def generate(ctx):
     res = []
-    bg = ctx.bg
-    # Only worth the work when outputs are small or same-shape edits
+    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+        res.extend(_rules(ctx, bg))
+    return res
+
+
+def _rules(ctx, bg):
+    res = []
     for seg in _SEGS:
         for sname, sel in O.SELECTORS:
             for rname, rend, rcost in RENDERERS:
@@ -100,6 +105,7 @@ def generate(ctx):
 
 
 def _apply(g, seg, sel, rend, bg):
+    bg = G.bg_or(g, bg)
     o = _pick(g, seg, sel, bg)
     if o is None:
         return None
@@ -107,6 +113,7 @@ def _apply(g, seg, sel, rend, bg):
 
 
 def _nth(g, seg, key, idx, bg):
+    bg = G.bg_or(g, bg)
     objs = O.segment(g, seg, bg)
     if not objs or len(objs) > 200:
         return None

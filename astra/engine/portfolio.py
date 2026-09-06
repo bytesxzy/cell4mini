@@ -53,11 +53,11 @@ def _load_default():
         return
     from .solvers import (analogy, blocks, cascade, cellwise, colormap, compose,
                           enumerate_dsl, geometry, objects_map, partition,
-                          regions, rewrite, paint, select, sequence,
-                          substitute, symmetry, tiling)
+                          regions, rewrite, paint, panelabs, select,
+                          sequence, substitute, symmetry, tiling)
     for m in (geometry, colormap, partition, symmetry, tiling, blocks, select,
               regions, cellwise, objects_map, substitute, sequence, paint, analogy,
-              compose, rewrite, cascade, enumerate_dsl):
+              compose, panelabs, rewrite, cascade, enumerate_dsl):
         register(m)
 
 
