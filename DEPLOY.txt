@@ -1,0 +1,151 @@
+CELL4 — uploading this to Namecheap (cPanel)
+============================================
+
+What is in this zip
+-------------------
+    source/main.lua     the original transpiler, recovered, unchanged
+    cell4/*.lua         the new compiler (lexer, rules, resolver, parser, emitters)
+    cell4c.lua          the command-line entry point
+    spec/*.lua          58 tests
+    ARCHITECTURE.md     what was wrong, what changed, what is still open
+    DEPLOY.txt          this file
+
+Extracting it produces exactly that layout, so it drops straight into a folder.
+
+
+BEFORE YOU UPLOAD — two things to check
+=======================================
+
+1. Where "cell4" actually is
+----------------------------
+On Namecheap shared hosting your home directory is /home/cellgdty. A folder
+called cell4 is in one of two places, and it matters:
+
+    /home/cellgdty/public_html/cell4     <- served to the public web
+    /home/cellgdty/cell4                 <- private, not reachable by URL
+
+In cPanel File Manager, turn on Settings -> Show Hidden Files, then look at
+both. Whichever one holds your existing site files is the one you want.
+
+2. If it IS under public_html, your .lua source becomes public
+--------------------------------------------------------------
+Apache has no handler for .lua, so it serves the file as plain text. Anyone
+who guesses https://yourdomain/cell4/cell4c.lua downloads your source.
+
+If that matters, put a file named .htaccess in the cell4 folder containing:
+
+    <FilesMatch "\.(lua|md)$">
+        Require all denied
+    </FilesMatch>
+
+On older Apache (2.2) use this instead:
+
+    <FilesMatch "\.(lua|md)$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+
+Or just keep the whole thing outside public_html, which is simpler and safer
+if nothing needs to serve it over HTTP.
+
+
+UPLOADING — pick one
+====================
+
+A. cPanel File Manager (no extra software)
+------------------------------------------
+ 1. Log in at namecheap.com -> Account -> Hosting List -> Manage -> cPanel,
+    or go to your cPanel URL directly and sign in.
+ 2. Open File Manager.
+ 3. Navigate to the parent of cell4 (public_html, or your home directory).
+ 4. BACK UP FIRST: right-click the existing cell4 folder -> Compress ->
+    Zip Archive. That leaves cell4.zip next to it. Do not skip this; the
+    steps below overwrite files.
+ 5. Click Upload, choose cell4-compiler.zip, wait for 100%.
+ 6. Go back to the folder, right-click cell4-compiler.zip -> Extract, and
+    set the destination to the cell4 folder.
+ 7. Confirm the overwrite when prompted.
+ 8. Delete cell4-compiler.zip when you're done.
+
+B. SFTP / FTP (better for repeat uploads)
+-----------------------------------------
+Use FileZilla or any SFTP client.
+
+    Host      your server hostname, e.g. serverXXX.web-hosting.com
+              (cPanel home page, right sidebar, "Shared IP" / server name)
+    Username  cellgdty
+    Password  your cPanel password
+    Port      21 for FTP, 22 for SFTP if your plan includes SSH
+
+Drag the extracted folders into place. Most clients ask before overwriting —
+say yes to all.
+
+C. SSH (fastest, if your plan has it)
+-------------------------------------
+Namecheap enables SSH on some plans only, and you usually have to switch it
+on in cPanel under "SSH Access" -> Manage SSH Keys first.
+
+    scp -P 21098 cell4-compiler.zip cellgdty@serverXXX.web-hosting.com:~/
+    ssh -p 21098 cellgdty@serverXXX.web-hosting.com
+    cd ~/public_html/cell4          # or ~/cell4
+    cp -r . ../cell4-backup-$(date +%F)
+    unzip -o ~/cell4-compiler.zip
+    rm ~/cell4-compiler.zip
+
+Port 21098 is Namecheap's usual SSH port rather than 22 — check "SSH Access"
+in cPanel for the exact value on your server.
+
+
+RUNNING IT ON THE SERVER — read this before you try
+===================================================
+Namecheap shared hosting gives you PHP, Python, Node.js and Ruby through
+cPanel's Application Manager. It does NOT ship Lua or LuaJIT, and on shared
+hosting you cannot install system packages.
+
+So: uploading these files stores them. It does not make them runnable.
+
+Check for yourself over SSH:
+
+    which lua lua5.4 luajit
+    ls /usr/bin/lua*
+
+If those come back empty, you have three options.
+
+ 1. Treat Namecheap as storage only. Run the compiler on your own machine or
+    your training servers, and upload the GENERATED output — the HTML that
+    cell4c.lua produces — rather than the compiler itself. This is almost
+    certainly what you want; the transpiler is a build tool, not a web app.
+
+ 2. Build Lua into your home directory. Only works if the plan allows
+    compiling, and it is fragile across server moves:
+
+        cd ~ && mkdir -p src && cd src
+        curl -R -O https://www.lua.org/ftp/lua-5.4.6.tar.gz
+        tar zxf lua-5.4.6.tar.gz && cd lua-5.4.6
+        make linux INSTALL_TOP=$HOME/.local && make install INSTALL_TOP=$HOME/.local
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+    Then `lua -v` should work on your next login.
+
+ 3. Use a host that runs arbitrary binaries — a VPS, or the servers you
+    already train on. Shared hosting is the wrong shape for this.
+
+
+VERIFYING THE UPLOAD
+====================
+If Lua is available:
+
+    cd ~/public_html/cell4        # or wherever it landed
+    lua spec/run.lua
+
+Expect: "58 passed, 0 failed".
+
+If Lua is not available, verify by file listing instead — you should see
+cell4/ with nine .lua files, spec/ with seven, plus cell4c.lua and
+source/main.lua at the top level.
+
+
+ROLLING BACK
+============
+If anything goes wrong, the cell4.zip you made in step 4 is the backup.
+Right-click it in File Manager -> Extract, overwriting the folder.
