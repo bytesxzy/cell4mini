@@ -1,0 +1,219 @@
+"""Learned block dictionaries: cell <-> patch and panel <-> panel.
+
+Three closely related rules, all learned as *compressing* lookup tables:
+
+``blockmap``   every input cell expands into a k x m patch chosen by its colour;
+``blockfold``  every k x m block of the input collapses to one output cell;
+``panelmap``   the grid decomposes into panels and each panel is rewritten by
+               a table keyed on the panel's own content.
+
+A table is only accepted if it has strictly fewer entries than observations --
+otherwise it is a transcript of the training data and predicts nothing.
+"""
+
+from collections import Counter
+
+from .. import grid as G
+from ..task import Hyp
+from .partition import _decompositions, panels_by_separator
+
+SOLVER = "tiling"
+
+
+def _h(n, f, c):
+    return Hyp(n, f, c, SOLVER)
+
+
+# --------------------------------------------------------------------------
+# cell -> patch
+# --------------------------------------------------------------------------
+
+def _fit_blockmap(ctx, ky, kx, keyed_on_shape):
+    table = {}
+    n_obs = 0
+    for a, b in ctx.train:
+        ah, aw = G.dims(a)
+        if G.dims(b) != (ah * ky, aw * kx):
+            return None
+        for r in range(ah):
+            for c in range(aw):
+                patch = tuple(row[c * kx:(c + 1) * kx]
+                              for row in b[r * ky:(r + 1) * ky])
+                k = a[r][c] if not keyed_on_shape else (a[r][c], r % 2, c % 2)
+                prev = table.get(k)
+                if prev is None:
+                    table[k] = patch
+                elif prev != patch:
+                    return None
+                n_obs += 1
+    if not table or len(table) >= n_obs:
+        return None
+
+    def run(g, t=table, ky=ky, kx=kx, ks=keyed_on_shape):
+        h, w = G.dims(g)
+        if h * ky > 60 or w * kx > 60:
+            return None
+        out = [[None] * (w * kx) for _ in range(h * ky)]
+        for r in range(h):
+            for c in range(w):
+                p = t.get(g[r][c] if not ks else (g[r][c], r % 2, c % 2))
+                if p is None:
+                    return None
+                for i in range(ky):
+                    orow = out[r * ky + i]
+                    prow = p[i]
+                    for j in range(kx):
+                        orow[c * kx + j] = prow[j]
+        return tuple(tuple(row) for row in out)
+    return run
+
+
+# --------------------------------------------------------------------------
+# patch -> cell
+# --------------------------------------------------------------------------
+
+def _fit_blockfold(ctx, ky, kx):
+    table = {}
+    n_obs = 0
+    for a, b in ctx.train:
+        ah, aw = G.dims(a)
+        bh, bw = G.dims(b)
+        if ah != bh * ky or aw != bw * kx:
+            return None
+        for r in range(bh):
+            for c in range(bw):
+                patch = tuple(row[c * kx:(c + 1) * kx]
+                              for row in a[r * ky:(r + 1) * ky])
+                prev = table.get(patch)
+                if prev is None:
+                    table[patch] = b[r][c]
+                elif prev != b[r][c]:
+                    return None
+                n_obs += 1
+    if not table or len(table) >= n_obs:
+        return None
+
+    def run(g, t=table, ky=ky, kx=kx):
+        h, w = G.dims(g)
+        if h % ky or w % kx:
+            return None
+        out = []
+        for r in range(h // ky):
+            row = []
+            for c in range(w // kx):
+                patch = tuple(rr[c * kx:(c + 1) * kx]
+                              for rr in g[r * ky:(r + 1) * ky])
+                v = t.get(patch)
+                if v is None:
+                    return None
+                row.append(v)
+            out.append(tuple(row))
+        return tuple(out)
+    return run
+
+
+# --------------------------------------------------------------------------
+# panel -> panel / panel -> cell
+# --------------------------------------------------------------------------
+
+def _fit_panelmap(ctx, dec, to_cell):
+    table = {}
+    n_obs = 0
+    for a, b in ctx.train:
+        mat = dec(a)
+        if not mat:
+            return None
+        nr, nc = len(mat), len(mat[0])
+        if to_cell:
+            if G.dims(b) != (nr, nc):
+                return None
+            for i in range(nr):
+                for j in range(nc):
+                    p = mat[i][j]
+                    if p is None:
+                        return None
+                    prev = table.get(p)
+                    if prev is None:
+                        table[p] = b[i][j]
+                    elif prev != b[i][j]:
+                        return None
+                    n_obs += 1
+        else:
+            omat = dec(b)
+            if not omat or len(omat) != nr or len(omat[0]) != nc:
+                return None
+            for i in range(nr):
+                for j in range(nc):
+                    p, q = mat[i][j], omat[i][j]
+                    if p is None or q is None:
+                        return None
+                    prev = table.get(p)
+                    if prev is None:
+                        table[p] = q
+                    elif prev != q:
+                        return None
+                    n_obs += 1
+    if not table or len(table) >= n_obs:
+        return None
+
+    def run(g, t=table, dec=dec, to_cell=to_cell):
+        mat = dec(g)
+        if not mat:
+            return None
+        if to_cell:
+            out = []
+            for row in mat:
+                orow = []
+                for p in row:
+                    v = t.get(p)
+                    if v is None:
+                        return None
+                    orow.append(v)
+                out.append(tuple(orow))
+            return tuple(out)
+        rows = []
+        for row in mat:
+            band = None
+            for p in row:
+                q = t.get(p)
+                if q is None:
+                    return None
+                band = q if band is None else G.hconcat(band, q)
+            if band is None:
+                return None
+            rows.append(band)
+        res = rows[0]
+        for r in rows[1:]:
+            res = G.vconcat(res, r)
+        return res
+    return run
+
+
+# --------------------------------------------------------------------------
+
+def generate(ctx):
+    res = []
+    r = ctx.shape_ratio
+    if r and r != (1, 1) and r[0] * r[1] <= 36:
+        for keyed in (False, True):
+            f = _fit_blockmap(ctx, r[0], r[1], keyed)
+            if f is not None:
+                res.append(_h("blockmap%dx%d%s" % (r[0], r[1],
+                                                   "_p" if keyed else ""),
+                              f, 3.0))
+    ir = ctx.inv_shape_ratio
+    if ir and ir != (1, 1) and ir[0] * ir[1] <= 64:
+        f = _fit_blockfold(ctx, ir[0], ir[1])
+        if f is not None:
+            res.append(_h("blockfold%dx%d" % ir, f, 3.0))
+
+    for dname, dcost, dec in _decompositions(ctx)[:6]:
+        for to_cell in (True, False):
+            try:
+                f = _fit_panelmap(ctx, dec, to_cell)
+            except Exception:
+                f = None
+            if f is not None:
+                res.append(_h("panelmap_%s_%s" % (dname, "cell" if to_cell else "grid"),
+                              f, dcost + 1.5))
+    return res
