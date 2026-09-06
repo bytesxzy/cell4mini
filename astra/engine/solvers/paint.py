@@ -179,6 +179,86 @@ def _connect_to_anchor(g, bg, seg, anchor_mode):
     return tuple(tuple(r) for r in out) if drawn else None
 
 
+# --- repeat a translation witnessed by two copies --------------------------
+
+def _repeat_translation(g, bg, seg, both):
+    """Two copies of a shape define a step; continue it to the edges.
+
+    The evidence for "keep going" is inside the grid itself: a pair of
+    identical objects fixes a translation vector, and the task is to iterate it.
+    """
+    bg = G.bg_or(g, bg)
+    objs = O.segment(g, seg, bg)
+    if len(objs) < 2 or len(objs) > 40:
+        return None
+    h, w = G.dims(g)
+    groups = {}
+    for o in objs:
+        groups.setdefault((o.patch,), []).append(o)
+    out = [list(r) for r in g]
+    drawn = False
+    for _k, members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda o: (o.r0, o.c0))
+        deltas = {(b.r0 - a.r0, b.c0 - a.c0)
+                  for a, b in zip(members, members[1:])}
+        if len(deltas) != 1:
+            continue
+        dr, dc = deltas.pop()
+        if dr == 0 and dc == 0:
+            continue
+        proto = members[0]
+        steps = [(members[-1].r0 + dr, members[-1].c0 + dc, dr, dc)]
+        if both:
+            steps.append((proto.r0 - dr, proto.c0 - dc, -dr, -dc))
+        for r0, c0, sr, sc in steps:
+            while True:
+                cells = [(r0 + (r - proto.r0), c0 + (c - proto.c0))
+                         for r, c in proto.cells]
+                if not all(0 <= r < h and 0 <= c < w for r, c in cells):
+                    break
+                for r, c in proto.cells:
+                    nr, nc = r0 + (r - proto.r0), c0 + (c - proto.c0)
+                    out[nr][nc] = g[r][c]
+                    drawn = True
+                r0 += sr
+                c0 += sc
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
+# --- stamp a template at every marker --------------------------------------
+
+def _stamp_at_markers(g, bg, seg, recolor, keep_marker):
+    bg = G.bg_or(g, bg)
+    objs = O.segment(g, seg, bg)
+    if len(objs) < 2 or len(objs) > 40:
+        return None
+    big = max(objs, key=lambda o: o.size)
+    if big.size < 3:
+        return None
+    markers = [o for o in objs if o.size == 1]
+    if not markers:
+        return None
+    h, w = G.dims(g)
+    cr = (big.r0 + big.r1) // 2
+    cc = (big.c0 + big.c1) // 2
+    out = [list(r) for r in g]
+    drawn = False
+    for m in markers:
+        mr, mc = next(iter(m.cells))
+        for r, c in big.cells:
+            nr, nc = mr + (r - cr), mc + (c - cc)
+            if 0 <= nr < h and 0 <= nc < w:
+                v = m.color if recolor else g[r][c]
+                if out[nr][nc] != v:
+                    out[nr][nc] = v
+                    drawn = True
+        if keep_marker:
+            out[mr][mc] = m.color
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
 # --- symmetrise each object -----------------------------------------------
 
 def _symmetrise(g, bg, seg, mode):
@@ -302,6 +382,16 @@ def _rules(ctx, bg):
                                                  sorted(assign.items())), oi),
                           (lambda a, o, bg: lambda g: _color_rays(g, bg, a, o))(assign, order, bg),
                           5.5 + 0.2 * sum(1 for v in assign.values() if v != "none")))
+    for seg in ("c8", "m8"):
+        for both in (True, False):
+            res.append(_h("repeat_%s%d" % (seg, both),
+                          (lambda s, b, bg: lambda g: _repeat_translation(g, bg, s, b))(seg, both, bg),
+                          5.0))
+        for rec in (False, True):
+            for keep in (True, False):
+                res.append(_h("stamp_%s%d%d" % (seg, rec, keep),
+                              (lambda s, r, k, bg: lambda g: _stamp_at_markers(g, bg, s, r, k))(seg, rec, keep, bg),
+                              5.2))
     for seg in ("c8", "m8", "c4"):
         for am in ("largest", "bbox"):
             res.append(_h("anchor_%s_%s" % (seg, am),

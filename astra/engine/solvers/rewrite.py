@@ -83,6 +83,37 @@ def _out_rewrites(ctx):
     return out
 
 
+def _rank_perm(g, bg):
+    """A colour permutation derived from this grid alone: background first,
+    then colours in order of how much of the grid they cover.
+
+    Tasks that use a different palette in every example are structurally one
+    task; without this they look like several. The permutation is a bijection
+    on 0-9 and is computed from the *input*, so it can be inverted at test time
+    without knowing the answer.
+    """
+    hist = G.histogram(g)
+    hist.pop(bg, None)
+    order = [bg] + [c for c, _n in sorted(hist.items(),
+                                          key=lambda kv: (-kv[1], kv[0]))]
+    rest = [c for c in range(10) if c not in order]
+    order += rest
+    return {c: i for i, c in enumerate(order)}
+
+
+def _invert(perm):
+    return {v: k for k, v in perm.items()}
+
+
+def _pair_rewrites(ctx):
+    """(name, per-grid forward permutation) applied to input and output alike."""
+    bg = ctx.bg
+    pals = {tuple(sorted(G.palette(a) - {bg})) for a in ctx.all_inputs}
+    if len(pals) < 2:
+        return []          # one palette: normalising buys nothing
+    return [("rankpal", lambda g, b=bg: _rank_perm(g, b))]
+
+
 _MODULE_NAMES = ("geometry", "colormap", "cellwise", "symmetry", "partition",
                  "objects_map", "sequence", "tiling", "regions", "select")
 
@@ -134,6 +165,45 @@ def generate(ctx):
             if len(res) > 60:
                 break
 
+    # ---- paired (invertible) colour rewrites ---------------------------
+    for rname, permf in _pair_rewrites(ctx):
+        if time.time() > deadline:
+            break
+        pairs = []
+        ok = True
+        for a, b in ctx.train:
+            p = permf(a)
+            if p is None:
+                ok = False
+                break
+            pairs.append((G.to_list(G.apply_cmap(a, p)),
+                          G.to_list(G.apply_cmap(b, p))))
+        if not ok:
+            continue
+        tins = []
+        for t in ctx.test_inputs:
+            p = permf(t)
+            if p is None:
+                tins = None
+                break
+            tins.append(G.to_list(G.apply_cmap(t, p)))
+        if tins is None:
+            continue
+        sub = Ctx(pairs, tins)
+        sub.deadline = min(deadline, time.time() + 1.5)
+        for mod in mods:
+            if time.time() > deadline:
+                break
+            try:
+                hyps = mod.generate(sub)
+            except Exception:
+                continue
+            for hp in hyps:
+                if hp.fits(sub.train):
+                    res.append(Hyp("%s~%s" % (rname, hp.name),
+                                   _chain_pair(permf, hp), 3.5 + hp.cost, SOLVER))
+                    break
+
     # ---- output-side rewrites ------------------------------------------
     for rname, fwd, inv in _out_rewrites(ctx):
         if time.time() > deadline:
@@ -178,6 +248,16 @@ def _chain_in(T, hp):
     def run(g):
         t = _safe(T, g)
         return None if t is None else hp.fn(t)
+    return run
+
+
+def _chain_pair(permf, hp):
+    def run(g):
+        p = permf(g)
+        if p is None:
+            return None
+        r = hp.fn(G.apply_cmap(g, p))
+        return None if r is None else G.apply_cmap(r, _invert(p))
     return run
 
 

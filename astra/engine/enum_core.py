@@ -51,6 +51,26 @@ def unary_ops(ctx, level="full"):
     return ops
 
 
+def seed_ops(ctx):
+    """Operators too costly to apply at every node.
+
+    They run once, on the raw input, seeding the frontier; the cheap library
+    then composes on top of whatever they produce.  Applying a symmetry repair
+    to fifteen hundred intermediate states is how a depth-4 search turns into a
+    depth-1 search that ran out of time.
+    """
+    bg = ctx.bg
+    pal = sorted(ctx.in_palette | ctx.out_palette)
+    ops = [("repair", 2.2, (lambda b=bg: lambda g: _repair_op(g, b))()),
+           ("complete", 2.4, (lambda b=bg: lambda g: _complete_op(g, b))()),
+           ("outline", 2.2, (lambda b=bg: lambda g: _halo_op(g, b, None))()),
+           ("connect", 2.2, (lambda b=bg: lambda g: _connect_op(g, b))())]
+    for c in pal:
+        ops.append(("halo#%d" % c, 2.4,
+                    (lambda c, b=bg: lambda g: _halo_op(g, b, c))(c)))
+    return ops
+
+
 def base_unary_ops(ctx, level="full"):
     """(name, cost, fn) triples.  ``level`` trades breadth for speed."""
     bg = ctx.bg
@@ -108,8 +128,83 @@ def base_unary_ops(ctx, level="full"):
         a(("largest4", 2.2, (lambda b=bg: lambda g: _extreme(g, "c4", b, True))()))
         a(("uniq_shape", 2.4, (lambda b=bg: lambda g: _uniq(g, "c8", b))()))
         a(("mode_color", 2.4, lambda g: ((G.most_common_color(g),),)))
+        # Procedural operators.  Depth is expensive; breadth at depth 2 is
+        # cheap, and most ARC programs are short over a *rich* library rather
+        # than long over a poor one.
+        a(("denoise", 2.0, (lambda b=bg: lambda g: _denoise(g, b))()))
+        a(("keep_big", 2.2, (lambda b=bg: lambda g: _keep_big(g, b, True))()))
+        a(("drop_big", 2.4, (lambda b=bg: lambda g: _keep_big(g, b, False))()))
+        a(("bbox_fill", 2.4, (lambda b=bg: lambda g: _bbox_fill(g, b))()))
+        a(("sortrows", 2.6, lambda g: tuple(sorted(g))))
+        a(("sortcols", 2.6, lambda g: G.transpose(tuple(sorted(G.transpose(g))))))
 
     return ops
+
+
+def _repair_op(g, bg):
+    from .solvers.symmetry import _repair
+    return _repair(g, bg, True)
+
+
+def _complete_op(g, bg):
+    from .solvers.symmetry import _repair_bounded
+    return _repair_bounded(g, bg, False, 0.0, 2, 0)
+
+
+def _denoise(g, bg):
+    """Drop every single-cell object."""
+    objs = O.segment(g, "c8", bg)
+    if not objs or len(objs) > 300:
+        return None
+    out = [list(r) for r in g]
+    hit = False
+    for o in objs:
+        if o.size == 1:
+            for r, c in o.cells:
+                out[r][c] = bg
+            hit = True
+    return tuple(tuple(r) for r in out) if hit else None
+
+
+def _halo_op(g, bg, color):
+    from .solvers.sequence import _halo
+    return _halo(g, bg, color, False, False)
+
+
+def _connect_op(g, bg):
+    from .solvers.sequence import _connect
+    return _connect(g, bg, None, False)
+
+
+def _keep_big(g, bg, keep):
+    objs = O.segment(g, "c8", bg)
+    if len(objs) < 2 or len(objs) > 300:
+        return None
+    o = O.select_extreme(objs, "size", True)
+    if o is None:
+        return None
+    h, w = G.dims(g)
+    if keep:
+        out = [[bg] * w for _ in range(h)]
+        for r, c in o.cells:
+            out[r][c] = g[r][c]
+    else:
+        out = [list(r) for r in g]
+        for r, c in o.cells:
+            out[r][c] = bg
+    return tuple(tuple(r) for r in out)
+
+
+def _bbox_fill(g, bg):
+    objs = O.segment(g, "c8", bg)
+    if not objs or len(objs) > 120:
+        return None
+    out = [list(r) for r in g]
+    for o in objs:
+        for r in range(o.r0, o.r1 + 1):
+            for c in range(o.c0, o.c1 + 1):
+                out[r][c] = o.color
+    return tuple(tuple(r) for r in out)
 
 
 def _compress(g, bg):
@@ -224,6 +319,35 @@ def search(ctx, depth=3, max_states=1400, deadline=None, level="full",
     frontier = [root]
     every = [root]          # every node ever expanded, for the binary layer
     names = {grids: "$"}
+
+    # seed the frontier with the expensive procedural operators, once
+    if level != "small":
+        for oname, ocost, f in seed_ops(ctx):
+            st = []
+            ok = True
+            for g in grids:
+                try:
+                    r = f(g)
+                except Exception:
+                    ok = False
+                    break
+                if r is None or not isinstance(r, tuple) or not G.valid(r):
+                    ok = False
+                    break
+                st.append(r)
+            if not ok:
+                continue
+            st = tuple(st)
+            if st in seen:
+                continue
+            seen[st] = True
+            nn = _Node(st, (f,), ocost)
+            names[st] = "%s($)" % oname
+            if st[:n_tr] == target:
+                found.append((names[st], ocost, _apply_chain(nn.chain)))
+                continue
+            frontier.append(nn)
+            every.append(nn)
 
     def check(node):
         if node.state[:n_tr] == target:
