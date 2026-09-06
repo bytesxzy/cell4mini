@@ -74,6 +74,10 @@ def run_one(args):
         sigs = list(learn.signatures(Ctx(train, test_inputs)))
     except Exception:
         sigs = []
+    # every synthesised program that fit the demonstrations, for abstraction
+    # mining -- not just the one that happened to win the vote
+    programs = [n.split(":", 1)[1] for n, _s in hyps
+                if n.startswith(("compose:", "enumerate:"))]
     program = None
     if chosen and chosen[0]:
         solver = chosen[0][0]
@@ -96,6 +100,7 @@ def run_one(args):
         "partial": round(part, 4), "time": round(el, 3),
         "solver": solver, "hyps": hyps[:3], "error": err,
         "n_test": len(tests), "sigs": sigs, "program": program,
+        "programs": programs,
     }
 
 

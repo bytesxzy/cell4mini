@@ -160,6 +160,20 @@ def _mk_extractors(bg):
         return (g[r][c], a["ccount"].get(g[r][c], 0))
     ex.append(("ccount", 4.5, colorcount))
 
+    def pos(g, r, c, a):
+        """Absolute position.  Only informative when the grids share a size --
+        the capacity guard and leave-one-out check do the filtering."""
+        return (g[r][c], r, c)
+    ex.append(("pos", 7.5, pos))
+
+    def rowpos(g, r, c, a):
+        return (g[r][c], r)
+    ex.append(("rowpos", 6.0, rowpos))
+
+    def colpos(g, r, c, a):
+        return (g[r][c], c)
+    ex.append(("colpos", 6.0, colpos))
+
     def colorrank(g, r, c, a):
         return (g[r][c], a["crank"].get(g[r][c], -1))
     ex.append(("crank", 4.5, colorrank))

@@ -45,8 +45,16 @@ class _DSU:
             self.p[rb] = ra
 
 
+_MAP_CACHE = {}
+
+
 def _candidate_maps(h, w):
-    """Yield (name, fn(r, c) -> (r, c) or None)."""
+    """(name, fn) permutations to test.  Cached: the same grid geometry is
+    asked for once per hypothesis variant, and building ~120 closures each
+    time is pure overhead."""
+    hit = _MAP_CACHE.get((h, w))
+    if hit is not None:
+        return hit
     maps = []
     for a in range(1, 2 * w - 2):
         maps.append(("mh%d" % a, (lambda a: lambda r, c: (r, a - c))(a)))
@@ -66,7 +74,27 @@ def _candidate_maps(h, w):
         maps.append(("diag", lambda r, c: (c, r)))
         maps.append(("adiag", (lambda n: lambda r, c: (n - c, n - r))(h - 1)))
         maps.append(("rot90", (lambda n: lambda r, c: (c, n - r))(h - 1)))
+    if len(_MAP_CACHE) > 64:
+        _MAP_CACHE.clear()
+    _MAP_CACHE[(h, w)] = maps
     return maps
+
+
+_PART_CACHE = {}
+
+
+def _partition(g, unknown, min_support, min_pairs):
+    """Orbit partition and its values.  Memoised across hypothesis variants:
+    strict, lax, patch and bounded all ask for exactly the same partition."""
+    key = (g, unknown, min_support, min_pairs)
+    hit = _PART_CACHE.get(key)
+    if hit is not None:
+        return hit
+    res = _partition_build(g, unknown, min_support, min_pairs)
+    if len(_PART_CACHE) > 96:
+        _PART_CACHE.clear()
+    _PART_CACHE[key] = res
+    return res
 
 
 def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT, min_pairs=6):
@@ -79,6 +107,11 @@ def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT, min_pairs=6):
     happens to line up on three cells -- merges two genuine orbits and destroys
     an otherwise perfect reconstruction.  Here that map is simply declined.
     """
+    return _repair_from(g, unknown, strict,
+                        _partition(g, unknown, min_support, min_pairs))
+
+
+def _partition_build(g, unknown, min_support, min_pairs):
     h, w = G.dims(g)
     n = h * w
     flat = [g[r][c] for r in range(h) for c in range(w)]
@@ -160,11 +193,21 @@ def _repair(g, unknown, strict=True, min_support=MIN_SUPPORT, min_pairs=6):
             parent[:] = trial
             vals = tvals
 
+    for i in range(n):
+        find(i)
+    return parent, vals, known, h, w
+
+
+def _repair_from(g, unknown, strict, part):
+    if part is None:
+        return None
+    parent, vals, known, h, w = part
+    n = h * w
     out = [[g[r][c] for c in range(w)] for r in range(h)]
     filled = False
     for i in range(n):
         if not known[i]:
-            v = vals.get(find(i))
+            v = vals.get(parent[i])
             if v is None:
                 if strict:
                     return None

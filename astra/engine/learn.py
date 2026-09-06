@@ -231,15 +231,24 @@ def fit(records, prev=None, min_count=2, bias_weight=1.2,
     op_counts = Counter()
     grams = Counter()
     for r in records:
-        if not r["solved"] or not r.get("program"):
+        if not r["solved"]:
             continue
-        chain = parse_chain(r["program"])
-        if not chain:
-            continue
-        op_counts.update(chain)
-        for n in (2, 3):
-            for i in range(len(chain) - n + 1):
-                grams[tuple(chain[i:i + n])] += 1
+        progs = list(r.get("programs") or [])
+        if r.get("program"):
+            progs.append(r["program"])
+        seen_here = set()
+        for prog in progs:
+            chain = parse_chain(prog)
+            if not chain:
+                continue
+            key = tuple(chain)
+            if key in seen_here:
+                continue          # one vote per task, not per variant
+            seen_here.add(key)
+            op_counts.update(chain)
+            for n in (2, 3):
+                for i in range(len(chain) - n + 1):
+                    grams[tuple(chain[i:i + n])] += 1
     pol.op_bias = {k: round(0.35 * math.log(1 + v), 4)
                    for k, v in op_counts.items() if v >= 2}
 

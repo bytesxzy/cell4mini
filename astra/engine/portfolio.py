@@ -53,11 +53,11 @@ def _load_default():
         return
     from .solvers import (analogy, blocks, cascade, cellwise, colormap, compose,
                           enumerate_dsl, geometry, objects_map, partition,
-                          regions, rewrite, paint, panelabs, select,
-                          sequence, substitute, symmetry, tiling)
+                          regions, rewrite, paint, panelabs, panelwise,
+                          select, sequence, substitute, symmetry, tiling)
     for m in (geometry, colormap, partition, symmetry, tiling, blocks, select,
               regions, cellwise, objects_map, substitute, sequence, paint, analogy,
-              compose, panelabs, rewrite, cascade, enumerate_dsl):
+              compose, panelabs, panelwise, rewrite, cascade, enumerate_dsl):
         register(m)
 
 
@@ -163,6 +163,9 @@ def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
         prior = SOLVER_PRIOR.get(fam, 2.0) + bias.get(fam, 0.0)
         for hyp in hyps:
             n_hyps += 1
+            # validating a large hypothesis batch can itself outrun the budget
+            if (n_hyps & 63) == 0 and time.time() > deadline:
+                break
             if hyp.fits(ctx.train):
                 fitted.append([hyp.cost + prior, order, hyp, mod])
                 order += 1
