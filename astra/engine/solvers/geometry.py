@@ -61,6 +61,7 @@ def generate(ctx):
         out.append(_h("tile%dx%d" % (ky, kx),
                       lambda g, ky=ky, kx=kx: G.tile(g, ky, kx), 3.0))
         out.extend(_mirror_tilings(ky, kx))
+        out.extend(_fitted_tiling(ctx, ky, kx, bg))
         out.extend(_fractal(ky, kx, ctx, bg))
     ir = ctx.inv_shape_ratio
     if ir and ir != (1, 1):
@@ -133,6 +134,68 @@ def _quad_mirror(g):
 def _quad_mirror_r(g):
     top = G.hconcat(G.flip_h(g), g)
     return G.vconcat(top, G.flip_v(top)) if top else None
+
+
+def _fitted_tiling(ctx, ky, kx, bg):
+    """Read each tile's transform off the training pairs instead of guessing.
+
+    There are 8^(k*m) ways to fill a k x m tiling with dihedral images, so
+    enumerating patterns only ever covers the handful someone thought of.
+    Every tile position is independently determined by the demonstrations, so
+    fit it: for each position, keep the transforms consistent with every
+    training pair, and take the cheapest survivor.
+    """
+    if ky * kx > 16:
+        return []
+    choice = {}
+    for i in range(ky):
+        for j in range(kx):
+            live = None
+            for a, b in ctx.train:
+                h, w = G.dims(a)
+                blk = G.subgrid(b, i * h, j * w, (i + 1) * h - 1, (j + 1) * w - 1)
+                if blk is None:
+                    return []
+                ok = set()
+                for name, f in G.DIHEDRAL:
+                    t = f(a)
+                    if G.dims(t) == (h, w) and t == blk:
+                        ok.add(name)
+                if len(set(v for row in blk for v in row)) == 1:
+                    ok.add("#%d" % blk[0][0])
+                live = ok if live is None else (live & ok)
+                if not live:
+                    return []
+            order = [n for n, _f in G.DIHEDRAL] + sorted(live)
+            choice[(i, j)] = next(n for n in order if n in live)
+    return [_h("fit_tile%dx%d" % (ky, kx),
+               (lambda ch, ky, kx: lambda g: _apply_fitted(g, ch, ky, kx))(choice, ky, kx),
+               2.8)]
+
+
+def _apply_fitted(g, choice, ky, kx):
+    h, w = G.dims(g)
+    if h * ky > 60 or w * kx > 60:
+        return None
+    rows = []
+    for i in range(ky):
+        band = None
+        for j in range(kx):
+            nm = choice[(i, j)]
+            if nm.startswith("#"):
+                t = G.const_grid(h, w, int(nm[1:]))
+            else:
+                t = G.DIHEDRAL_MAP[nm](g)
+                if G.dims(t) != (h, w):
+                    return None
+            band = t if band is None else G.hconcat(band, t)
+        if band is None:
+            return None
+        rows.append(band)
+    res = rows[0]
+    for r in rows[1:]:
+        res = G.vconcat(res, r)
+    return res
 
 
 def _mirror_tilings(ky, kx):

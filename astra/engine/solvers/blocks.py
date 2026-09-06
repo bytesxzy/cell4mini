@@ -190,6 +190,70 @@ def _fit_panelmap(ctx, dec, to_cell):
 
 
 # --------------------------------------------------------------------------
+# row / column dictionaries
+# --------------------------------------------------------------------------
+
+def _fit_linemap(ctx, axis):
+    """Learn a lookup from a whole row (or column) to its replacement.
+
+    Rows are a natural unit for a surprising number of tasks -- striping,
+    row-wise recolouring, sorting -- and a row-level table compresses far
+    harder than a cell-level one, so the capacity guard passes on evidence a
+    per-cell rule would have to memorise.
+    """
+    table = {}
+    n = 0
+    for a, b in ctx.train:
+        if G.dims(a) != G.dims(b):
+            return None
+        ra = a if axis == 0 else G.transpose(a)
+        rb = b if axis == 0 else G.transpose(b)
+        for x, y in zip(ra, rb):
+            prev = table.get(x)
+            if prev is None:
+                table[x] = y
+            elif prev != y:
+                return None
+            n += 1
+    if not table or len(table) >= n:
+        return None
+
+    def run(g, t=table, axis=axis):
+        rows = g if axis == 0 else G.transpose(g)
+        out = []
+        for x in rows:
+            y = t.get(x)
+            if y is None:
+                return None
+            out.append(y)
+        res = tuple(out)
+        return res if axis == 0 else G.transpose(res)
+    return run
+
+
+def _drop_lines(g, axis, mode, bg):
+    """Delete rows (or columns) that are empty, or uniform, or duplicated."""
+    bg = G.bg_or(g, bg)
+    rows = g if axis == 0 else G.transpose(g)
+    keep = []
+    seen = set()
+    for r in rows:
+        if mode == "empty" and all(v == bg for v in r):
+            continue
+        if mode == "uniform" and len(set(r)) == 1:
+            continue
+        if mode == "dup":
+            if r in seen:
+                continue
+            seen.add(r)
+        keep.append(r)
+    if not keep or len(keep) == len(rows):
+        return None
+    res = tuple(keep)
+    return res if axis == 0 else G.transpose(res)
+
+
+# --------------------------------------------------------------------------
 
 def generate(ctx):
     res = []
@@ -207,6 +271,14 @@ def generate(ctx):
         if f is not None:
             res.append(_h("blockfold%dx%d" % ir, f, 3.0))
 
+    for axis in (0, 1):
+        f = _fit_linemap(ctx, axis)
+        if f is not None:
+            res.append(_h("linemap%d" % axis, f, 3.5))
+        for mode in ("empty", "uniform", "dup"):
+            res.append(_h("drop_%s%d" % (mode, axis),
+                          (lambda a, m, bg: lambda g: _drop_lines(g, a, m, bg))(axis, mode, ctx.bg),
+                          3.2))
     for dname, dcost, dec in _decompositions(ctx)[:6]:
         for to_cell in (True, False):
             try:

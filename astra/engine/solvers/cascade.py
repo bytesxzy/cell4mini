@@ -47,7 +47,7 @@ def _near_states(ctx, depth, keep, deadline):
     n_tr = len(ctx.train)
     grids = ctx.inputs + ctx.test_inputs
     target = ctx.outputs
-    ops = enum_core.unary_ops(ctx, "full")
+    ops = enum_core.unary_ops(ctx, "full") + enum_core.seed_ops(ctx)
     start_score = sum(_agreement(g, t) for g, t in zip(grids[:n_tr], target)) / n_tr
     seen = {grids}
     frontier = [(grids, (), "$", 0.0)]
@@ -119,7 +119,7 @@ def generate(ctx):
         return []
     stage_dl = min(deadline, time.time() + max(1.0, (deadline - time.time()) * 0.4))
     try:
-        states = _near_states(ctx, depth=2, keep=6, deadline=stage_dl)
+        states = _near_states(ctx, depth=2, keep=8, deadline=stage_dl)
     except Exception:
         return []
     if not states:

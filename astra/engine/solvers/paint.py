@@ -259,6 +259,155 @@ def _stamp_at_markers(g, bg, seg, recolor, keep_marker):
     return tuple(tuple(r) for r in out) if drawn else None
 
 
+# --- move a shape onto a marked target -------------------------------------
+
+def _move_to_markers(g, bg, marker, mode):
+    """Translate the main object onto the box staked out by marker cells."""
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    marks = [(r, c) for r, row in enumerate(g) for c, v in enumerate(row)
+             if v == marker]
+    if len(marks) < 2 or len(marks) > 8:
+        return None
+    mr0, mc0, mr1, mc1 = G.bbox_of(marks)
+    body = [(r, c) for r, row in enumerate(g) for c, v in enumerate(row)
+            if v != bg and v != marker]
+    if not body:
+        return None
+    br0, bc0, br1, bc1 = G.bbox_of(body)
+    if mode == "center":
+        dr = ((mr0 + mr1) - (br0 + br1)) // 2
+        dc = ((mc0 + mc1) - (bc0 + bc1)) // 2
+    elif mode == "inside":
+        dr, dc = (mr0 + 1) - br0, (mc0 + 1) - bc0
+    else:
+        dr, dc = mr0 - br0, mc0 - bc0
+    if dr == 0 and dc == 0:
+        return None
+    out = [[bg] * w for _ in range(h)]
+    for r, c in marks:
+        out[r][c] = marker
+    for r, c in body:
+        nr, nc = r + dr, c + dc
+        if not (0 <= nr < h and 0 <= nc < w):
+            return None
+        out[nr][nc] = g[r][c]
+    return tuple(tuple(r) for r in out)
+
+
+# --- growth to a fixed point ----------------------------------------------
+
+def _voronoi(g, bg, diag, tie_bg):
+    """Grow every coloured region simultaneously until the grid is full.
+
+    A one-step local rule cannot express this: the colour a far cell ends up
+    with depends on a distance computed across the whole grid. Ties (cells
+    equidistant from two seeds) are either left as background or resolved to
+    the lower colour, which are genuinely different tasks.
+    """
+    from collections import deque
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    dist = [[-1] * w for _ in range(h)]
+    col = [[bg] * w for _ in range(h)]
+    q = deque()
+    for r in range(h):
+        for c in range(w):
+            if g[r][c] != bg:
+                dist[r][c] = 0
+                col[r][c] = g[r][c]
+                q.append((r, c))
+    if not q or len(q) == h * w:
+        return None
+    nb = G.N8 if diag else G.N4
+    tie = [[False] * w for _ in range(h)]
+    while q:
+        cr, cc = q.popleft()
+        for dr, dc in nb:
+            nr, nc = cr + dr, cc + dc
+            if not (0 <= nr < h and 0 <= nc < w):
+                continue
+            if dist[nr][nc] == -1:
+                dist[nr][nc] = dist[cr][cc] + 1
+                col[nr][nc] = col[cr][cc]
+                q.append((nr, nc))
+            elif (dist[nr][nc] == dist[cr][cc] + 1
+                  and col[nr][nc] != col[cr][cc]):
+                tie[nr][nc] = True
+                if not tie_bg and col[cr][cc] < col[nr][nc]:
+                    col[nr][nc] = col[cr][cc]
+    out = []
+    for r in range(h):
+        row = []
+        for c in range(w):
+            if g[r][c] != bg:
+                row.append(g[r][c])
+            elif tie[r][c] and tie_bg:
+                row.append(bg)
+            else:
+                row.append(col[r][c])
+        out.append(tuple(row))
+    return tuple(out)
+
+
+def _fill_enclosed(g, bg, diag):
+    """Paint each enclosed background pocket with the colour that encloses it."""
+    from collections import deque
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    seen = [[False] * w for _ in range(h)]
+    q = deque()
+    for r in range(h):
+        for c in (0, w - 1):
+            if g[r][c] == bg and not seen[r][c]:
+                seen[r][c] = True
+                q.append((r, c))
+    for c in range(w):
+        for r in (0, h - 1):
+            if g[r][c] == bg and not seen[r][c]:
+                seen[r][c] = True
+                q.append((r, c))
+    nb = G.N8 if diag else G.N4
+    while q:
+        cr, cc = q.popleft()
+        for dr, dc in nb:
+            nr, nc = cr + dr, cc + dc
+            if 0 <= nr < h and 0 <= nc < w and not seen[nr][nc] and g[nr][nc] == bg:
+                seen[nr][nc] = True
+                q.append((nr, nc))
+    out = [list(r) for r in g]
+    drawn = False
+    vis = [[False] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if g[r][c] != bg or seen[r][c] or vis[r][c]:
+                continue
+            comp = []
+            border = Counter()
+            st = [(r, c)]
+            vis[r][c] = True
+            while st:
+                cr, cc = st.pop()
+                comp.append((cr, cc))
+                for dr, dc in G.N4:
+                    nr, nc = cr + dr, cc + dc
+                    if not (0 <= nr < h and 0 <= nc < w):
+                        continue
+                    if g[nr][nc] == bg:
+                        if not vis[nr][nc] and not seen[nr][nc]:
+                            vis[nr][nc] = True
+                            st.append((nr, nc))
+                    else:
+                        border[g[nr][nc]] += 1
+            if not border:
+                continue
+            col = border.most_common(1)[0][0]
+            for cr, cc in comp:
+                out[cr][cc] = col
+                drawn = True
+    return tuple(tuple(r) for r in out) if drawn else None
+
+
 # --- symmetrise each object -----------------------------------------------
 
 def _symmetrise(g, bg, seg, mode):
@@ -382,6 +531,19 @@ def _rules(ctx, bg):
                                                  sorted(assign.items())), oi),
                           (lambda a, o, bg: lambda g: _color_rays(g, bg, a, o))(assign, order, bg),
                           5.5 + 0.2 * sum(1 for v in assign.values() if v != "none")))
+    for mc in sorted(ctx.in_palette - {bg if bg is not None else -1}):
+        for mode in ("center", "corner", "inside"):
+            res.append(_h("moveto#%d_%s" % (mc, mode),
+                          (lambda m, md, bg: lambda g: _move_to_markers(g, bg, m, md))(mc, mode, bg),
+                          5.4))
+    for diag in (False, True):
+        for tie_bg in (True, False):
+            res.append(_h("voronoi%d%d" % (diag, tie_bg),
+                          (lambda d, t, bg: lambda g: _voronoi(g, bg, d, t))(diag, tie_bg, bg),
+                          4.4))
+        res.append(_h("fill_enclosed%d" % diag,
+                      (lambda d, bg: lambda g: _fill_enclosed(g, bg, d))(diag, bg),
+                      4.2))
     for seg in ("c8", "m8"):
         for both in (True, False):
             res.append(_h("repeat_%s%d" % (seg, both),

@@ -75,6 +75,52 @@ def _pick(grid, seg, sel, bg):
     return sel(objs)
 
 
+_OVERLAY_OPS = ("or", "and", "xor", "mode", "first", "last")
+
+
+def _overlay_objects(g, seg, op, bg, use_mask):
+    """Superimpose every object of equal bounding-box size.
+
+    "Stack the shapes and report what they have in common" is a whole ARC
+    family, and it is invisible to the panel-logic solver because the pieces
+    are objects scattered on the canvas rather than panels cut from a lattice.
+    """
+    bg = G.bg_or(g, bg)
+    objs = O.segment(g, seg, bg)
+    if len(objs) < 2 or len(objs) > 30:
+        return None
+    dims = {(o.height, o.width) for o in objs}
+    if len(dims) != 1:
+        return None
+    h, w = dims.pop()
+    if h * w > 400:
+        return None
+    patches = [o.filled(bg) for o in objs]
+    if use_mask:
+        patches = [tuple(tuple(1 if v != bg else bg for v in r) for r in p)
+                   for p in patches]
+    out = []
+    for r in range(h):
+        row = []
+        for c in range(w):
+            vals = [p[r][c] for p in patches]
+            live = [v for v in vals if v != bg]
+            if op == "or":
+                row.append(live[0] if live else bg)
+            elif op == "and":
+                row.append(live[0] if len(live) == len(vals) else bg)
+            elif op == "xor":
+                row.append(live[0] if len(live) == 1 else bg)
+            elif op == "mode":
+                row.append(Counter(vals).most_common(1)[0][0])
+            elif op == "first":
+                row.append(vals[0])
+            else:
+                row.append(vals[-1])
+        out.append(tuple(row))
+    return tuple(out)
+
+
 def generate(ctx):
     res = []
     for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
@@ -84,6 +130,13 @@ def generate(ctx):
 
 def _rules(ctx, bg):
     res = []
+    for seg in ("c8", "m8", "c4"):
+        for op in _OVERLAY_OPS:
+            for um in (False, True):
+                res.append(_h("overlay_%s_%s%s" % (seg, op, "_m" if um else ""),
+                              (lambda s, o, bg, m:
+                               lambda g: _overlay_objects(g, s, o, bg, m))(seg, op, bg, um),
+                              4.5))
     for seg in _SEGS:
         for sname, sel in O.SELECTORS:
             for rname, rend, rcost in RENDERERS:
