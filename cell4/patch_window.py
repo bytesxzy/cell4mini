@@ -204,14 +204,17 @@ assert OLD_CACHE_BLOCK in src, "champion cache block not found"
 src = src.replace(OLD_CACHE_BLOCK, NEW_CACHE_BLOCK, 1)
 
 # ---------------------------------------------------------------- 3. delta gated on digest
-OLD_DELTA = """  local ext_delta = nil
+OLD_DELTA = """  -- Movement on the external ARC set, generation over generation. Only comparable when the same
+  -- number of tasks was attempted, so the delta is left nil (and stays unspoken) when it is not.
+  local ext_delta = nil
   local prev_ext = state.last_external
   if prev_ext and champ_r.external.n > 0 and prev_ext.n == champ_r.external.n then
     ext_delta = champ_r.external.solved - prev_ext.solved
   end
   state.last_external = { solved = champ_r.external.solved, n = champ_r.external.n, gen = gen }
 """
-NEW_DELTA = """  -- Comparable only when the *same tasks* were attempted, not merely the same number of them.
+NEW_DELTA = """  -- Movement on the external ARC set, generation over generation.
+  -- Comparable only when the *same tasks* were attempted, not merely the same number of them.
   -- The window rotates by generation, so this is usually nil and the narrator stays silent about
   -- movement rather than comparing two different samples as if they were one.
   local ext_delta = nil

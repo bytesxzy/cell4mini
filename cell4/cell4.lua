@@ -4456,8 +4456,7 @@ function M.run_generation(opts)
     if not ok_j then io.stderr:write("journal render failed: " .. tostring(err_j) .. "\n") end
   end
 
-  -- Movement on the external ARC set, generation over generation. Only comparable when the same
-  -- number of tasks was attempted, so the delta is left nil (and stays unspoken) when it is not.
+  -- Movement on the external ARC set, generation over generation.
   -- Comparable only when the *same tasks* were attempted, not merely the same number of them.
   -- The window rotates by generation, so this is usually nil and the narrator stays silent about
   -- movement rather than comparing two different samples as if they were one.
