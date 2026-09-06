@@ -259,6 +259,73 @@ def _stamp_at_markers(g, bg, seg, recolor, keep_marker):
     return tuple(tuple(r) for r in out) if drawn else None
 
 
+# --- bouncing rays ---------------------------------------------------------
+
+def _bounce(g, bg, start_color, diag, max_steps=200):
+    """A ray that reflects off the grid edges until it runs out of steps.
+
+    Reflection is not expressible as a local rule or as a straight ray: the
+    direction at a cell depends on the whole path taken to reach it.
+    """
+    bg = G.bg_or(g, bg)
+    h, w = G.dims(g)
+    src = [(r, c) for r, row in enumerate(g) for c, v in enumerate(row)
+           if v == start_color]
+    if len(src) != 1:
+        return None
+    r, c = src[0]
+    dirs = ((1, 1), (1, -1), (-1, 1), (-1, -1)) if diag else ((1, 0), (0, 1))
+    out = [list(x) for x in g]
+    drawn = False
+    for dr, dc in dirs:
+        cr, cc, vr, vc = r, c, dr, dc
+        for _ in range(max_steps):
+            nr, nc = cr + vr, cc + vc
+            if not (0 <= nr < h):
+                vr = -vr
+                nr = cr + vr
+            if not (0 <= nc < w):
+                vc = -vc
+                nc = cc + vc
+            if not (0 <= nr < h and 0 <= nc < w):
+                break
+            if g[nr][nc] == bg:
+                out[nr][nc] = start_color
+                drawn = True
+            cr, cc = nr, nc
+    return tuple(tuple(x) for x in out) if drawn else None
+
+
+# --- histogram / bar output ------------------------------------------------
+
+def _bars(g, bg, vertical, order_desc, out_shape):
+    """Turn a colour histogram into a bar chart."""
+    bg = G.bg_or(g, bg)
+    hist = G.histogram(g)
+    hist.pop(bg, None)
+    if not hist or len(hist) > 10:
+        return None
+    items = sorted(hist.items(), key=lambda kv: (-kv[1], kv[0]))
+    if not order_desc:
+        items = items[::-1]
+    n = len(items)
+    m = max(v for _k, v in items)
+    if m > 30 or n > 30:
+        return None
+    h, w = (m, n) if vertical else (n, m)
+    if out_shape is not None:
+        if out_shape != (h, w):
+            return None
+    out = [[bg] * w for _ in range(h)]
+    for i, (col, cnt) in enumerate(items):
+        for j in range(cnt):
+            if vertical:
+                out[h - 1 - j][i] = col
+            else:
+                out[i][j] = col
+    return tuple(tuple(r) for r in out)
+
+
 # --- move a shape onto a marked target -------------------------------------
 
 def _move_to_markers(g, bg, marker, mode):
@@ -493,10 +560,18 @@ def _ray_assignments(colors):
 
 
 def generate(ctx):
-    if not ctx.same_shape:
-        return []
     res = []
-    for bg in ([ctx.bg, None] if ctx.bg_varies else [ctx.bg]):
+    bgs = [ctx.bg, None] if ctx.bg_varies else [ctx.bg]
+    # bar charts change the grid shape, so they sit outside the same-shape gate
+    for bg in bgs:
+        for vert in (True, False):
+            for desc in (True, False):
+                res.append(_h("bars%d%d" % (vert, desc),
+                              (lambda v, d, b: lambda g: _bars(g, b, v, d, None))(vert, desc, bg),
+                              5.5))
+    if not ctx.same_shape:
+        return res
+    for bg in bgs:
         res.extend(_rules(ctx, bg))
     return res
 
@@ -531,6 +606,11 @@ def _rules(ctx, bg):
                                                  sorted(assign.items())), oi),
                           (lambda a, o, bg: lambda g: _color_rays(g, bg, a, o))(assign, order, bg),
                           5.5 + 0.2 * sum(1 for v in assign.values() if v != "none")))
+    for c in sorted(ctx.in_palette - {bg if bg is not None else -1}):
+        for diag in (True, False):
+            res.append(_h("bounce#%d%d" % (c, diag),
+                          (lambda c, d, bg: lambda g: _bounce(g, bg, c, d))(c, diag, bg),
+                          5.6))
     for mc in sorted(ctx.in_palette - {bg if bg is not None else -1}):
         for mode in ("center", "corner", "inside"):
             res.append(_h("moveto#%d_%s" % (mc, mode),

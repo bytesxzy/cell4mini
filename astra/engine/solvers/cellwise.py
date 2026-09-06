@@ -183,6 +183,35 @@ def _mk_extractors(bg):
 _AUX_CACHE = {}
 
 
+_PAIRS = (
+    ("n8fg", "parity"), ("n8fg", "border"), ("n8count", "parity"),
+    ("n4count", "border"), ("objsize", "n8mask"), ("rays", "n8count"),
+    ("crank", "n8fg"), ("rcuni", "n8fg"), ("objdims", "objrel"),
+    ("ring", "n8fg"), ("ccount", "n8count"), ("rowpos", "colpos"),
+)
+
+
+def _mk_pair_extractors(bg):
+    """Conjunctions of two context families.
+
+    Single families are each a projection of the cell's situation, and plenty
+    of ARC rules need two of them at once -- "a background cell next to exactly
+    one filled neighbour, on an even row". The cost is a bigger table, which
+    the capacity guard and the leave-one-out check are already there to police,
+    so only a curated dozen pairs are offered rather than the full product.
+    """
+    base = {n: f for n, _c, f in _mk_extractors(bg)}
+    out = []
+    for a, b in _PAIRS:
+        fa, fb = base.get(a), base.get(b)
+        if fa is None or fb is None:
+            continue
+        out.append((a + "+" + b, 9.0,
+                    (lambda fa, fb: lambda g, r, c, x: (fa(g, r, c, x),
+                                                        fb(g, r, c, x)))(fa, fb)))
+    return out
+
+
 def _aux(g, bg):
     """Per-grid derived context, memoised: every extractor and every
     leave-one-out refit asks for the same analysis of the same grids."""
@@ -342,7 +371,12 @@ def generate(ctx):
     bg = ctx.bg
     res = []
     ncells = sum(G.area(a) for a, _ in ctx.train)
-    for name, cost, fn in _mk_extractors(bg):
+    families = _mk_extractors(bg)
+    if ncells >= 400:
+        # paired contexts have far more capacity; only offer them when there
+        # is enough evidence for the guards below to mean something
+        families = families + _mk_pair_extractors(bg)
+    for name, cost, fn in families:
         if ctx.timed_out():
             break
         table = _fit(ctx.train, fn, bg)

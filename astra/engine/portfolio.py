@@ -203,6 +203,43 @@ def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
     if fitted:
         res.solver = fitted[0][2].solver
 
+    # --- task-level invariants -------------------------------------------
+    # Properties that hold across every demonstration are evidence about the
+    # answer even when no single hypothesis knows them: if every output is the
+    # same shape as its input, a prediction that changes the shape is wrong
+    # whatever produced it.
+    exp_shape = None
+    if ctx.const_out_shape:
+        exp_shape = ("const", ctx.const_out_shape)
+    elif ctx.same_shape:
+        exp_shape = ("same", None)
+    elif ctx.shape_ratio:
+        exp_shape = ("ratio", ctx.shape_ratio)
+    elif ctx.inv_shape_ratio:
+        exp_shape = ("iratio", ctx.inv_shape_ratio)
+    allowed = None
+    if not ctx.new_colors:
+        allowed = set(ctx.out_palette)
+
+    def _violations(tg, g):
+        n = 0
+        if exp_shape is not None:
+            th, tw = G.dims(tg)
+            gh, gw = G.dims(g)
+            kind, par = exp_shape
+            if kind == "const" and (gh, gw) != par:
+                n += 1
+            elif kind == "same" and (gh, gw) != (th, tw):
+                n += 1
+            elif kind == "ratio" and (gh, gw) != (th * par[0], tw * par[1]):
+                n += 1
+            elif kind == "iratio" and (th % par[0] or tw % par[1]
+                                       or (gh, gw) != (th // par[0], tw // par[1])):
+                n += 1
+        if allowed is not None and not (G.palette(g) <= allowed | G.palette(tg)):
+            n += 1
+        return n
+
     preds = []
     pool = fitted[:150]
     for ti in test_inputs:
@@ -227,6 +264,7 @@ def solve(train, test_inputs, time_budget=30.0, k=2, loo=True,
         scored = []
         for g, fam in best.items():
             weight = sum(2.718281828 ** (-s / 2.0) for s in fam.values())
+            weight *= 0.25 ** _violations(tg, g)
             scored.append((-weight, first[g], g))
         scored.sort()
         seen = [g for _w, _r, g in scored]

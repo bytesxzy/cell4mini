@@ -121,14 +121,20 @@ _MODULE_NAMES = ("geometry", "colormap", "cellwise", "symmetry", "partition",
 def _modules():
     from ..solvers import (cellwise, colormap, geometry, objects_map, partition,
                            regions, select, sequence, symmetry, tiling)
-    return (geometry, colormap, symmetry, partition, tiling, regions,
-            cellwise, objects_map, sequence, select)
+    from ..solvers import blocks, compose, paint, substitute
+    return (geometry, colormap, symmetry, partition, tiling, blocks, regions,
+            cellwise, objects_map, substitute, sequence, paint, select, compose)
 
 
 def generate(ctx):
     res = []
     deadline = ctx.deadline or (time.time() + 6.0)
     mods = _modules()
+    # Share the module's slice across its variants instead of giving the first
+    # one a fixed 1.2s and letting the rest run out of clock: before this the
+    # later rewrites were effectively never tried.
+    n_var = max(1, len(_in_rewrites(ctx)) + len(_pair_rewrites(ctx)) + 3)
+    slice_s = max(0.35, (deadline - time.time()) / n_var)
 
     # ---- input-side rewrites -------------------------------------------
     for rname, T in _in_rewrites(ctx):
@@ -148,7 +154,7 @@ def generate(ctx):
         if any(t is None for t in tins):
             continue
         sub = Ctx(pairs, [G.to_list(t) for t in tins])
-        sub.deadline = min(deadline, time.time() + 1.2)
+        sub.deadline = min(deadline, time.time() + slice_s)
         for mod in mods:
             if time.time() > deadline:
                 break
@@ -190,7 +196,7 @@ def generate(ctx):
         if tins is None:
             continue
         sub = Ctx(pairs, tins)
-        sub.deadline = min(deadline, time.time() + 1.5)
+        sub.deadline = min(deadline, time.time() + slice_s)
         for mod in mods:
             if time.time() > deadline:
                 break
@@ -202,6 +208,32 @@ def generate(ctx):
                 if hp.fits(sub.train):
                     res.append(Hyp("%s~%s" % (rname, hp.name),
                                    _chain_pair(permf, hp), 3.5 + hp.cost, SOLVER))
+                    break
+
+    # ---- paired geometric rewrites -------------------------------------
+    # Several families are row-biased by construction (row dictionaries, half
+    # selection, downward gravity).  Solving the transposed task and undoing
+    # the transpose gives every one of them its column-wise twin for free.
+    for gname, fwd, inv in (("T", G.transpose, G.transpose),
+                            ("R", G.rot90, G.rot270)):
+        if time.time() > deadline:
+            break
+        pairs = [(G.to_list(fwd(a)), G.to_list(fwd(b))) for a, b in ctx.train]
+        tins = [G.to_list(fwd(t)) for t in ctx.test_inputs]
+        sub = Ctx(pairs, tins)
+        sub.deadline = min(deadline, time.time() + slice_s)
+        for mod in mods:
+            if time.time() > deadline:
+                break
+            try:
+                hyps = mod.generate(sub)
+            except Exception:
+                continue
+            for hp in hyps:
+                if hp.fits(sub.train):
+                    res.append(Hyp("%s@%s" % (gname, hp.name),
+                                   _chain_geo(fwd, inv, hp), 3.5 + hp.cost,
+                                   SOLVER))
                     break
 
     # ---- output-side rewrites ------------------------------------------
@@ -219,7 +251,7 @@ def generate(ctx):
         if not ok:
             continue
         sub = Ctx(pairs, [G.to_list(t) for t in ctx.test_inputs])
-        sub.deadline = min(deadline, time.time() + 1.5)
+        sub.deadline = min(deadline, time.time() + slice_s)
         for mod in mods:
             if time.time() > deadline:
                 break
@@ -248,6 +280,13 @@ def _chain_in(T, hp):
     def run(g):
         t = _safe(T, g)
         return None if t is None else hp.fn(t)
+    return run
+
+
+def _chain_geo(fwd, inv, hp):
+    def run(g):
+        r = hp.fn(fwd(g))
+        return None if r is None else inv(r)
     return run
 
 
