@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GABRIEL chat — local demo</title>
+<style>
+  body{background:#000;color:#f2f2f2;font-family:Georgia,'Times New Roman',serif;
+       margin:0;padding:60px 24px;text-align:center}
+  h1{font-size:15px;font-weight:normal;letter-spacing:.4px}
+  h2{font-size:12px;font-weight:normal;color:#9a9a9a;line-height:1.7;max-width:520px;margin:14px auto}
+  code{font-family:Menlo,Consolas,monospace;font-size:11px;color:#ff6347}
+  .hint{margin-top:34px;font-size:11px;color:#6a6a6a}
+  .red{color:#e33232}
+</style>
+</head>
+<body>
+  <h1>GABRIEL chat</h1>
+  <h2>Open this file by double-clicking it. The assistant is the diamond in the
+  bottom-right corner.<br><br>
+  It answers out of this site's own pages, and it runs entirely in your browser
+  — no server, no API key, no outside model.<br><br>
+  <span class="red">Rebuild its brain</span> after the site changes:<br>
+  <code>python3 build_brain.py</code><br>
+  <code>python3 build_brain.py --url https://cell4.art/ --crawl 8</code></h2>
+  <div class="hint">Try: what do you charge · who have you worked with · which Roblox games · how do I get in touch</div>
+
+  <script src="brain/brain.js"></script>
+  <script src="gabriel-chat.js"></script>
+</body>
+</html>
