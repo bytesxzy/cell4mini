@@ -80,6 +80,8 @@ def main(argv=None):
         page = fh.read()
     with open(os.path.join(HERE, "robots.runtime.js"), encoding="utf-8") as fh:
         runtime = fh.read()
+    with open(os.path.join(HERE, "robots.sources.js"), encoding="utf-8") as fh:
+        sources = fh.read()
 
     payload = json.dumps(brain, separators=(",", ":"), ensure_ascii=False)
     # </script> inside a string literal would close the block early
@@ -90,7 +92,7 @@ def main(argv=None):
     start = page.index("/*__BRAIN__*/")
     end = page.index("/*__END__*/") + len("/*__END__*/")
     page = page[:start] + payload + page[end:]
-    page = page.replace("/*__RUNTIME__*/", cfg + "\n" + runtime)
+    page = page.replace("/*__RUNTIME__*/", cfg + "\n" + sources + "\n" + runtime)
 
     with open(a.out, "w", encoding="utf-8") as fh:
         fh.write(page)

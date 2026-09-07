@@ -96,6 +96,10 @@ body.embed #panel{position:static;width:100%;height:100%;max-width:none;right:au
   background:none;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;
   display:flex;align-items:center;justify-content:center}
 .icobtn:hover{border-color:var(--line);background:var(--oat-solid);color:var(--accent)}
+.icobtn.on{background:var(--me);color:var(--me-ink);border-color:transparent}
+.ext{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-top:7px;
+  display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.ext b{font-weight:500;color:var(--accent)}
 body.embed .close{display:none}
 
 #log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;
@@ -168,6 +172,7 @@ body.embed .close{display:none}
       </svg>
     </div>
     <div class="who"><b>robots.html</b><span id="sub">loading…</span></div>
+    <button class="icobtn web" title="Also search public databases">◍</button>
     <button class="icobtn theme" title="Light / dark">◐</button>
     <button class="icobtn close" title="Close">✕</button>
   </header>

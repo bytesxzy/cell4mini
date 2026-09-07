@@ -38,6 +38,76 @@ Same origin only. A browser will not let any page fetch a third party's site,
 and no amount of JavaScript changes that — which is also why this cannot read
 the open internet, only yours.
 
+## Public databases — sixteen, no keys
+
+When the site's own pages cannot answer, the page queries public APIs that take
+no key and no account. Nothing to sign up for, nothing to paste into a config.
+
+| | |
+| --- | --- |
+| **Wikidata** | ~115M structured entities — people, companies, products |
+| **Wikipedia** | article intros, full-text search |
+| **GLEIF** | the global registry of legal entities: real companies, addresses, status |
+| **OpenAlex** | ~250M scholarly works |
+| **Crossref** | DOIs and journal metadata |
+| **GitHub** | repositories, stars, languages |
+| **Stack Overflow** | questions and accepted answers |
+| **Hacker News** | discussion threads |
+| **Open Library** | books and authors |
+| **CoinGecko** | tokens, symbols, market-cap rank |
+| **REST Countries** | capitals, populations, currencies |
+| **Open-Meteo** | places and coordinates |
+| **npm / PyPI** | packages and versions |
+| **Datamuse** | definitions and related words |
+| **Open Food Facts** | products and ingredients |
+
+**Site first, always.** CELL4's own pages outrank every outside source, so
+nothing external can speak over the site about the site. The lookup fires only
+when local retrieval finds nothing, when the question says so ("search…",
+"look up…"), or when the ◍ button is on. A question is routed to the four most
+relevant databases rather than all sixteen — asking everything every time is
+slower, ruder to the services, and no better.
+
+Results come back as ordinary passages: ranked by the same BM25 + query
+likelihood, cited with a link, labelled with the database they came from, and
+available to the learner like anything else.
+
+### Why it checks itself
+
+The constraint is not cost, it is **CORS**. A page may only read an API that
+chooses to send `Access-Control-Allow-Origin`, and that choice lives on their
+servers — it can change without warning and differ by network.
+
+So no source is trusted. The first failure is recorded, the second disables it
+on that device for a day, and the rest carry on. Click **"N databases"** in the
+status line (or run `robots.diagnose()` in the console) to probe every source
+and get the live verdict from your own browser:
+
+```
+8 of 16 public databases answered from this browser just now:
+  OK  CoinGecko — 1 result (26ms)
+  --  Crossref — blocked or down (13ms)
+  OK  Wikidata — 2 results (16ms)
+  ...
+```
+
+That is real output from the test run. **Run it once after you upload the file**
+— it is the only way to know what your visitors' browsers can actually reach,
+and it takes five seconds.
+
+### LinkedIn
+
+Not possible, and I would rather say so than ship something that looks like it.
+Every LinkedIn API — Marketing, Talent, Sign In with LinkedIn — requires OAuth
+plus partner approval; their servers send no CORS headers to a page like this;
+and scraping profiles breaches their User Agreement. Anything advertising
+"keyless LinkedIn data" is a paid scraper reselling data of contested
+provenance behind a key, which is the opposite of what you asked for.
+
+People and companies are served instead by **Wikidata** (notable people and
+organisations, structured) and **GLEIF** (the registry of legal entities, with
+addresses and ownership) — open by design rather than open by accident.
+
 ## How it answers
 
 Two scores, added:
@@ -101,7 +171,8 @@ radii, Figtree / Space Grotesk / JetBrains Mono) and live at the top of
 ```
 robots.html            the artefact -- this is the only file you deploy
 robots.template.html   the shell and the design tokens
-robots.runtime.js      retrieval, live reading, learning, UI
+robots.runtime.js      retrieval, live reading, federation, learning, UI
+robots.sources.js      the sixteen public databases and how to read each
 build_robots.py        inlines the brain and the runtime into robots.html
 build_brain.py         shared: reads pages, trains the model
 ```

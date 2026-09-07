@@ -445,8 +445,149 @@
     }
   }
 
+
+  /* ----------------------------------------------------- public databases
+   * Sixteen keyless APIs, defined in robots.sources.js. Nothing to sign up
+   * for and nothing to paste into a config: every one of them answers an
+   * anonymous GET.
+   *
+   * The hard constraint is not cost, it is CORS. A page may only read an API
+   * that chooses to send Access-Control-Allow-Origin, and that choice lives on
+   * their servers and can change without warning. So no source is assumed to
+   * work: the first failure is recorded, the second disables it on this
+   * device for a day, and `robots.diagnose()` reports what is actually live
+   * from the visitor's own browser. A source that quietly dies degrades the
+   * answer rather than breaking the page.
+   */
+  var HEALTH_KEY = "robots.sources.v1";
+  var FED_TIMEOUT = 7000;
+  var FED_SLOTS = 4;
+  var COOLDOWN = 24 * 3600 * 1000;
+
+  function Federation(defs) {
+    this.defs = defs || [];
+    this.health = {};
+    this.cache = {};
+    try { this.health = JSON.parse(localStorage.getItem(HEALTH_KEY) || "{}"); } catch (e) {}
+  }
+
+  Federation.prototype.save = function () {
+    try { localStorage.setItem(HEALTH_KEY, JSON.stringify(this.health)); } catch (e) {}
+  };
+
+  Federation.prototype.state = function (id) {
+    var h = this.health[id];
+    if (!h) return "unknown";
+    if (h.off && Date.now() - h.off < COOLDOWN) return "disabled";
+    return h.ok ? "live" : "unknown";
+  };
+
+  Federation.prototype.note = function (id, ok) {
+    var h = this.health[id] || (this.health[id] = { ok: 0, fail: 0 });
+    if (ok) { h.ok++; h.fail = 0; delete h.off; }
+    else if (++h.fail >= 2) { h.off = Date.now(); }
+    this.save();
+  };
+
+  Federation.prototype.get = function (url, cb) {
+    var done = false, ctl = null;
+    try { ctl = new AbortController(); } catch (e) {}
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      if (ctl) try { ctl.abort(); } catch (e) {}
+      cb(null);
+    }, FED_TIMEOUT);
+    fetch(url, ctl ? { signal: ctl.signal, referrerPolicy: "no-referrer" }
+                   : { referrerPolicy: "no-referrer" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (j) { if (!done) { done = true; clearTimeout(timer); cb(j); } })
+      .catch(function () { if (!done) { done = true; clearTimeout(timer); cb(null); } });
+  };
+
+  /* Which databases does this question actually look like? Four slots, spent
+     on the highest scorers -- asking all sixteen every time would be slower,
+     ruder to the services, and no better. */
+  Federation.prototype.pick = function (question, n) {
+    var t = tok(question), self = this, scored = [];
+    this.defs.forEach(function (d) {
+      if (self.state(d.id) === "disabled") return;
+      var w = 0;
+      try { w = d.when(question, t); } catch (e) { w = 0; }
+      if (self.state(d.id) === "live") w += 0.15;      /* proven here before */
+      scored.push({ d: d, w: w });
+    });
+    scored.sort(function (a, b) { return b.w - a.w; });
+    return scored.slice(0, n || FED_SLOTS).map(function (x) { return x.d; });
+  };
+
+  Federation.prototype.ask = function (question, cb) {
+    var key = question.toLowerCase().trim();
+    if (this.cache[key]) return cb(this.cache[key].p, this.cache[key].used);
+    var picks = this.pick(question), self = this, left = picks.length,
+        found = [], used = [];
+    if (!left) return cb([], []);
+    picks.forEach(function (d) {
+      var url;
+      try { url = d.url(question); } catch (e) { url = null; }
+      if (!url) { if (!--left) finish(); return; }
+      self.get(url, function (j) {
+        var rows = [];
+        if (j) {
+          try { rows = d.parse(j, question) || []; } catch (e) { rows = []; }
+        }
+        self.note(d.id, !!j);
+        if (rows.length) {
+          used.push(d.label);
+          rows.slice(0, 3).forEach(function (r) {
+            if (!r || !r.t) return;
+            found.push({ h: r.h || d.label, t: txtOf(r.t), s: r.s || d.home,
+                         g: [], x: d.label });
+          });
+        }
+        if (!--left) finish();
+      });
+    });
+    function finish() {
+      self.cache[key] = { p: found, used: used };
+      cb(found, used);
+    }
+  };
+
+  /* One probe per source, reported honestly: this is the only way to know
+     what a given browser on a given network can actually reach. */
+  Federation.prototype.diagnose = function (cb) {
+    var self = this, left = this.defs.length, rows = [];
+    this.defs.forEach(function (d) {
+      var url;
+      try { url = d.url(d.probe); } catch (e) { url = null; }
+      if (!url) { rows.push([d.label, "bad url", 0]); if (!--left) done(); return; }
+      var t0 = Date.now();
+      self.get(url, function (j) {
+        var n = 0;
+        if (j) { try { n = (d.parse(j, d.probe) || []).length; } catch (e) {} }
+        self.note(d.id, !!j);
+        rows.push([d.label, j ? (n + " result" + (n === 1 ? "" : "s")) : "blocked or down",
+                   Date.now() - t0]);
+        if (!--left) done();
+      });
+    });
+    function done() {
+      rows.sort(function (a, b) { return a[0] < b[0] ? -1 : 1; });
+      var text = rows.map(function (r) {
+        return "  " + (r[1].indexOf("result") > 0 ? "OK  " : "--  ") +
+               r[0] + " — " + r[1] + " (" + r[2] + "ms)";
+      }).join("\n");
+      if (cb) cb(rows, text);
+      else console.log("robots.html source check\n" + text);
+      return text;
+    }
+  };
+
+  function txtOf(s) { return String(s).replace(/\s+/g, " ").trim(); }
+
   /* ------------------------------------------------------------------- ui */
-  var brain = new Brain(B), learner;
+  var brain = new Brain(B), learner, fed, webAlways = false;
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -459,6 +600,12 @@
     var m = el("div", "msg bot");
     m.appendChild(document.createTextNode(a.text));
     if (a.also) m.appendChild(el("div", "also", "Also: " + a.also));
+    if (a.used && a.used.length) {
+      var via = el("div", "ext");
+      via.appendChild(el("span", null, "via"));
+      a.used.forEach(function (label) { via.appendChild(el("b", null, label)); });
+      m.appendChild(via);
+    }
     if ((a.sources && a.sources.length) || a.hit) {
       var meta = el("div", "meta");
       (a.sources || []).filter(function (s, i, arr) { return s && arr.indexOf(s) === i; })
@@ -489,18 +636,56 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  /* Everything the site itself can answer is answered from the site. The
+     public databases are the fallback -- and the site's own pages always
+     outrank them, so an outside source can never speak over CELL4 about
+     CELL4. The globe button makes the lookup unconditional. */
+  var WEB_ASKED = /\b(search|look ?up|google|web|internet|online|wikipedia|wikidata)\b/i;
+
   function ask(text) {
     log.appendChild(el("div", "msg me", text));
     var wait = el("div", "msg bot think");
     wait.innerHTML = "<i></i><i></i><i></i>";
     log.appendChild(wait);
     log.scrollTop = log.scrollHeight;
-    setTimeout(function () {
-      log.removeChild(wait);
-      var a = answer(text);
+
+    function land(a) {
+      if (wait.parentNode) log.removeChild(wait);
       bot(a, text);
       if (a.hit) { learner.step(text, a.hit, 1); paintStatus(); }
+    }
+
+    setTimeout(function () {
+      var local = answer(text);
+      var forced = webAlways || WEB_ASKED.test(text);
+      if (local.hit && !forced) return land(local);
+      if (!fed) return land(local);
+      fed.ask(text, function (rows, used) {
+        if (rows.length) {
+          absorb(rows);
+          var wider = answer(text);
+          if (wider.hit) {
+            wider.used = used;
+            return land(wider);
+          }
+        }
+        land(local);
+      });
     }, 240 + Math.random() * 200);
+  }
+
+  /* Results from outside become passages like any other, which means the
+     ranking treats them the same way and the learner can improve on them. */
+  function absorb(rows) {
+    var stamp = Date.now();
+    rows.forEach(function (r, i) { r.key = "ext:" + stamp + ":" + i; });
+    brain.passages = brain.passages.concat(rows);
+    var ext = brain.passages.filter(function (p) { return p.x; });
+    if (ext.length > 200) {                    /* keep the tail bounded */
+      var drop = ext.slice(0, ext.length - 200);
+      brain.passages = brain.passages.filter(function (p) { return drop.indexOf(p) < 0; });
+    }
+    brain.reindex();
   }
 
   function paintStatus() {
@@ -516,6 +701,14 @@
     learn.title = "Gradient steps this browser kept, out of steps it tried. A step is " +
                   "discarded when it would rank earlier questions worse.";
     statusEl.appendChild(learn);
+    statusEl.appendChild(el("span", "sep", "·"));
+    var live = 0;
+    if (fed) fed.defs.forEach(function (d) { if (fed.state(d.id) !== "disabled") live++; });
+    var srcs = el("a", null, live + " databases");
+    srcs.title = "Keyless public APIs this page can query. Click to check which " +
+                 "actually answer from this browser.";
+    srcs.addEventListener("click", checkSources);
+    statusEl.appendChild(srcs);
     if (s.rounds) {
       statusEl.appendChild(el("span", "sep", "·"));
       var ex = el("a", null, "export");
@@ -523,6 +716,22 @@
       ex.addEventListener("click", exportLearning);
       statusEl.appendChild(ex);
     }
+  }
+
+  function checkSources() {
+    var m = el("div", "msg bot", "Checking every source from this browser…");
+    log.appendChild(m);
+    log.scrollTop = log.scrollHeight;
+    fed.diagnose(function (rows, text) {
+      var ok = rows.filter(function (r) { return r[1].indexOf("result") > 0; }).length;
+      m.textContent = ok + " of " + rows.length + " public databases answered from " +
+        "this browser just now:\n\n" + text +
+        "\n\nA source that says \"blocked or down\" is refusing this page's " +
+        "origin or is unreachable on this network. It is switched off here for a " +
+        "day and the rest carry on.";
+      paintStatus();
+      log.scrollTop = log.scrollHeight;
+    });
   }
 
   function exportLearning() {
@@ -544,6 +753,7 @@
        change the indices under it. */
     brain.passages.forEach(function (p, i) { p.key = (p.s || "") + "#" + i; });
     learner = new Learner(brain);
+    fed = new Federation(window.ROBOTS_SOURCE_DEFS || []);
 
     var suggestions = CFG.suggestions ||
       ["What does CELL4 do?", "What is robots.js?", "Show me the proof of work",
@@ -597,8 +807,19 @@
     if (e.key === "Escape") panel.classList.remove("open");
   });
 
-  window.robots = { ask: ask, brain: brain, export: exportLearning,
-                    open: function () { panel.classList.add("open"); } };
+  $(".web").addEventListener("click", function () {
+    webAlways = !webAlways;
+    this.classList.toggle("on", webAlways);
+    this.title = webAlways ? "Public databases: always" : "Also search public databases";
+  });
+
+  window.robots = {
+    ask: ask, brain: brain, export: exportLearning,
+    open: function () { panel.classList.add("open"); },
+    sources: function () { return fed; },
+    diagnose: function (cb) { return fed.diagnose(cb); },
+    web: function (on) { webAlways = on !== false; $(".web").classList.toggle("on", webAlways); }
+  };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
