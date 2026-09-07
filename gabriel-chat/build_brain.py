@@ -132,6 +132,29 @@ def _clean(s):
     return s
 
 
+def dedupe_phrases(text, n=3):
+    """Drop repeated n-grams, keeping the first occurrence.
+
+    Site chrome -- a nav bar, a repeated brand word -- arrives as the same
+    phrase several times inside one passage.  Left alone it multiplies that
+    passage's term frequencies and makes it the best match for everything.
+    """
+    words = text.split()
+    if len(words) < n * 2:
+        return text
+    seen, out, i = set(), [], 0
+    while i < len(words):
+        gram = " ".join(words[i:i + n]).lower()
+        if len(words) - i >= n and gram in seen:
+            i += n
+            continue
+        if len(words) - i >= n:
+            seen.add(gram)
+        out.append(words[i])
+        i += 1
+    return " ".join(out)
+
+
 def tokenize(text):
     return [w for w in re.findall(r"[a-z0-9][a-z0-9'+#.-]*", text.lower())
             if w not in STOP and len(w) > 1]
@@ -192,7 +215,9 @@ def build_passages(pages, min_words=3):
                 continue
             if current is None:
                 current = {"heading": "", "text": "", "source": source}
-            if len(current["text"]) > 700 and re.search(r"[.!?]\s*$", current["text"]):
+            long_enough = len(current["text"]) > 700
+            if long_enough and (re.search(r"[.!?]\s*$", current["text"])
+                                or len(current["text"]) > 1200):
                 passages.append(current)
                 current = {"heading": current["heading"], "text": "",
                            "source": source}
@@ -205,7 +230,7 @@ def build_passages(pages, min_words=3):
                              "text": "%s: %s" % (text, href)})
     out = []
     for p in passages:
-        p["text"] = _clean(p["text"])
+        p["text"] = dedupe_phrases(_clean(p["text"]))
         if len(p["text"].split()) < min_words and p["heading"]:
             p["text"] = p["heading"]
         if len(p["text"].split()) >= min_words:
@@ -239,6 +264,21 @@ def build_passages(pages, min_words=3):
         run.append(p)
     close_run()
     out = grouped
+
+    # A nav bar reads as a passage containing every section name on the site,
+    # which is a passage that matches every question ever asked.  Recognise it
+    # by what it is -- a list of other passages' headings -- and drop it.
+    headings = [h for h in {p["heading"].strip().rstrip(":") for p in out}
+                if len(h.split()) >= 2]
+    kept = []
+    for p in out:
+        if len(p["text"]) > 160:
+            body = p["text"].lower()
+            echoes = sum(1 for h in headings if h and h.lower() in body)
+            if echoes >= 4:
+                continue
+        kept.append(p)
+    out = kept or out
 
     # drop duplicates, keeping the first occurrence
     seen, uniq = set(), []
@@ -301,37 +341,38 @@ def _export_lm(lm, prune=0.02):
 # vocabulary bridge, not a set of answers: every alias expands the *query*, and
 # the reply still has to be retrieved from a real passage.
 ALIASES = {
-    "cost": ["price", "pricing", "charge", "usd"],
-    "charge": ["price", "pricing", "cost", "usd"],
-    "expensive": ["price", "pricing", "cost"],
-    "cheap": ["price", "pricing", "cost"],
-    "quote": ["price", "pricing", "negotiable"],
-    "rate": ["price", "pricing"],
-    "pay": ["payments", "paypal", "crypto", "cashapp"],
-    "payment": ["payments", "paypal", "crypto", "cashapp"],
-    "contact": ["discord", "username", "zeropleasure"],
-    "touch": ["discord", "username", "contacts"],
-    "message": ["discord", "username", "contacts"],
-    "talk": ["discord", "username", "contacts"],
-    "reach": ["discord", "username", "contacts"],
-    "email": ["discord", "username", "contacts"],
-    "dm": ["discord", "username", "contacts"],
-    "hire": ["service", "commissioning", "price"],
-    "commission": ["commissioning", "price", "service"],
-    "portfolio": ["cell4", "wip"],
-    "about": ["cell4", "portfolio", "team"],
-    "who": ["team", "managers", "developers"],
-    "clients": ["recognition", "jetbrains", "popg", "technologies"],
-    "worked": ["work", "recognition", "contributions"],
-    "experience": ["recognition", "work", "contributions"],
-    "games": ["game", "roblox", "contributions"],
-    "roblox": ["contributions", "game"],
-    "model": ["modeling", "3d"],
-    "modelling": ["modeling", "3d"],
-    "blender": ["modeling", "3d"],
-    "crypto": ["token", "web3", "payments"],
-    "web3": ["token", "marketing", "management"],
+    "cost": ["price", "pricing", "rates", "quote", "budget"],
+    "charge": ["price", "pricing", "cost", "rates"],
+    "price": ["pricing", "cost", "quote"],
+    "quote": ["pricing", "inquire", "project"],
+    "hire": ["inquire", "project", "contact", "start"],
+    "clients": ["proof", "case", "studies", "partners"],
+    "portfolio": ["proof", "case", "studies"],
+    "experience": ["proof", "case", "studies", "receipts"],
+    "contact": ["inquire", "email", "mailto", "gmail", "contact"],
+    "touch": ["inquire", "email", "mailto", "gmail", "contact"],
+    "reach": ["inquire", "email", "mailto", "gmail", "contact"],
+    "email": ["inquire", "email", "mailto", "gmail", "contact"],
+    "dm": ["dms", "rooms", "community", "lounge"],
+    "message": ["dms", "rooms", "community", "chat"],
+    "chat": ["rooms", "community", "lounge", "board"],
+    "community": ["rooms", "members", "lounge", "board"],
+    "join": ["community", "rooms", "account", "sign"],
+    "team": ["members", "contributors", "everyone"],
+    "who": ["team", "members", "contributors"],
+    "agency": ["b2b", "multipurpose", "strategy", "execution"],
+    "services": ["strategy", "execution", "b2b", "agency"],
+    "robots": ["agent", "reply", "twitter", "automa"],
+    "bot": ["agent", "robots", "reply"],
+    "agent": ["robots", "reply", "twitter", "automa"],
+    "twitter": ["agent", "robots", "reply"],
+    "token": ["cpx", "usdt", "market", "trade"],
+    "crypto": ["web3", "token", "cpx"],
+    "uptime": ["live", "99.8"],
+    "product": ["robots", "agent", "products"],
+    "download": ["robots", "agent", "free", "members"],
 }
+
 
 
 def main(argv=None):
